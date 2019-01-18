@@ -17,6 +17,7 @@ fn evaluate_obligation<'tcx>(
     tcx: TyCtxt<'_, 'tcx, 'tcx>,
     canonical_goal: CanonicalPredicateGoal<'tcx>,
 ) -> Result<EvaluationResult, OverflowError> {
+    debug!("evaluate_obligation({:?})", canonical_goal);
     tcx.infer_ctxt().enter_with_canonical(
         DUMMY_SP,
         &canonical_goal,

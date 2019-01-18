@@ -86,6 +86,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                       -> InferResult<'tcx, ()>
         where T: ToTrace<'tcx>
     {
+        debug!("At.sub_exp(a={:?}, b={:?}, a_is_expected={})", a, b, a_is_expected);
         self.trace_exp(a_is_expected, a, b).sub(&a, &b)
     }
 
@@ -109,6 +110,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                   -> InferResult<'tcx, ()>
         where T: ToTrace<'tcx>
     {
+        debug!("At.sub(expected={:?}, actual={:?})", expected, actual);
         self.sub_exp(true, expected, actual)
     }
 
@@ -120,6 +122,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                      -> InferResult<'tcx, ()>
         where T: ToTrace<'tcx>
     {
+        debug!("At.eq_exp(a={:?}, b={:?}, a_is_expected={})", a, b, a_is_expected);
         self.trace_exp(a_is_expected, a, b).eq(&a, &b)
     }
 
@@ -130,6 +133,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                  -> InferResult<'tcx, ()>
         where T: ToTrace<'tcx>
     {
+        debug!("At.eq(expected={:?}, actual={:?})", expected, actual);
         self.trace(expected, actual).eq(&expected, &actual)
     }
 
@@ -191,6 +195,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                     -> Trace<'a, 'gcx, 'tcx>
         where T: ToTrace<'tcx>
     {
+        debug!("At.trace(expected={:?}, actual={:?})", expected, actual);
         self.trace_exp(true, expected, actual)
     }
 
@@ -204,6 +209,7 @@ impl<'a, 'gcx, 'tcx> At<'a, 'gcx, 'tcx> {
                         -> Trace<'a, 'gcx, 'tcx>
         where T: ToTrace<'tcx>
     {
+        debug!("At.trace_exp(a={:?}, a={:?}, a_is_expected={:?})", a, b, a_is_expected);
         let trace = ToTrace::to_trace(self.cause, a_is_expected, a, b);
         Trace { at: self, trace: trace, a_is_expected }
     }
@@ -237,7 +243,7 @@ impl<'a, 'gcx, 'tcx> Trace<'a, 'gcx, 'tcx> {
                  -> InferResult<'tcx, ()>
         where T: Relate<'tcx>
     {
-        debug!("eq({:?} == {:?})", a, b);
+        debug!("eq({:?} == {:?}) - a_is_expected: {}", a, b, self.a_is_expected);
         let Trace { at, trace, a_is_expected } = self;
         at.infcx.commit_if_ok(|_| {
             let mut fields = at.infcx.combine_fields(trace, at.param_env);

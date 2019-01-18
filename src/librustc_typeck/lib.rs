@@ -162,22 +162,29 @@ fn require_same_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                 expected: Ty<'tcx>,
                                 actual: Ty<'tcx>)
                                 -> bool {
+    debug!("require_same_types(expected={:?}, actual={:?})", expected, actual);
     tcx.infer_ctxt().enter(|ref infcx| {
         let param_env = ty::ParamEnv::empty();
         let mut fulfill_cx = TraitEngine::new(infcx.tcx);
         match infcx.at(&cause, param_env).eq(expected, actual) {
             Ok(InferOk { obligations, .. }) => {
+                debug!("require_same_types - eq Ok");
                 fulfill_cx.register_predicate_obligations(infcx, obligations);
             }
             Err(err) => {
+                debug!("require_same_types - eq Err -> report_mismatched_types");
                 infcx.report_mismatched_types(cause, expected, actual, err).emit();
                 return false;
             }
         }
 
         match fulfill_cx.select_all_or_error(infcx) {
-            Ok(()) => true,
+            Ok(()) => {
+                debug!("require_same_types - select_all_or_error Ok");
+                true
+            },
             Err(errors) => {
+                debug!("require_same_types - select_all_or_error Err -> report_fulfillment_errors");
                 infcx.report_fulfillment_errors(&errors, None, false);
                 false
             }

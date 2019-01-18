@@ -17,7 +17,7 @@ impl<'a, 'gcx, 'tcx> CombineFields<'a, 'gcx, 'tcx> {
     where
         T: Relate<'tcx>,
     {
-        debug!("higher_ranked_sub(a={:?}, b={:?})", a, b);
+        debug!("higher_ranked_sub(a={:?}, b={:?}, trace={:?}, values={:?})", a, b, self.trace, self.trace.values);
 
         // Rather than checking the subtype relationship between `a` and `b`
         // as-is, we need to do some extra work here in order to make sure

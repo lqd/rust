@@ -1064,6 +1064,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                         self.emit_unstable_name_collision_hint(p, &unstable_candidates);
                     }
                 }
+                debug!("pick_method - found pick - ok: {}", pick.is_ok());
                 return Some(pick);
             }
         }
@@ -1078,6 +1079,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         if res.is_none() {
             self.unsatisfied_predicates.extend(possibly_unsatisfied_predicates);
         }
+        debug!("pick_method - consider_candidates res");
         res
     }
 

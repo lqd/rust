@@ -919,7 +919,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
         let (expected_found, exp_found, is_simple_error) = match values {
             None => (None, None, false),
-            Some(values) => {
+            Some(ref values) => {
                 let (is_simple_error, exp_found) = match values {
                     ValuePairs::Types(exp_found) => {
                         let is_simple_err =
@@ -929,7 +929,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     }
                     _ => (false, None),
                 };
-                let vals = match self.values_str(&values) {
+                let vals = match self.values_str(values) {
                     Some((expected, found)) => Some((expected, found)),
                     None => {
                         // Derived error. Cancel the emitter.
@@ -949,8 +949,8 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         }
 
         if let Some((expected, found)) = expected_found {
-            match (terr, is_simple_error, expected == found) {
-                (&TypeError::Sorts(ref values), false, true) => {
+            match (terr, is_simple_error, expected == found, &values) {
+                (&TypeError::Sorts(ref values), false, true, _) => {
                     diag.note_expected_found_extra(
                         &"type",
                         expected,
@@ -959,7 +959,24 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         &format!(" ({})", values.found.sort_string(self.tcx)),
                     );
                 }
-                (_, false, _) => {
+                // (
+                //     &TypeError::RegionsPlaceholderMismatch,
+                //     false,
+                //     true,
+                //     &Some(ValuePairs::TraitRefs(ref values)),
+                // ) => {
+                //     // Handle higher-ranked trait-ref errors when `expected` and `found` only differ
+                //     // in the trait-ref `self` type.
+                //     // See issue 57362
+                //     diag.note_expected_found_extra(
+                //         &"trait",
+                //         expected,
+                //         found,
+                //         &format!(" to be implemented for `{}`", values.expected.self_ty()),
+                //         &format!(" implemented for `{}`", values.found.self_ty()),
+                //     );
+                // }
+                (_, false, _, _) => {
                     if let Some(exp_found) = exp_found {
                         let (def_id, ret_ty) = match exp_found.found.sty {
                             TyKind::FnDef(def, _) => {

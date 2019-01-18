@@ -10,6 +10,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
     ) -> bool {
+        debug!("predicate_may_hold(obligation={:?})", obligation);
         self.evaluate_obligation_no_overflow(obligation).may_apply()
     }
 
@@ -23,6 +24,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
     ) -> bool {
+        debug!("predicate_must_hold_considering_regions(obligation={:?})", obligation);
         self.evaluate_obligation_no_overflow(obligation).must_apply_considering_regions()
     }
 
@@ -35,6 +37,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
     ) -> bool {
+        debug!("predicate_must_hold_modulo_regions(obligation={:?})", obligation);
         self.evaluate_obligation_no_overflow(obligation).must_apply_modulo_regions()
     }
 
@@ -43,6 +46,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
     ) -> Result<EvaluationResult, OverflowError> {
+        debug!("evaluate_obligation(obligation={:?})", obligation);
         let mut _orig_values = OriginalQueryValues::default();
         let c_pred = self.canonicalize_query(&obligation.param_env.and(obligation.predicate),
                                              &mut _orig_values);
@@ -59,6 +63,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
     ) -> EvaluationResult {
+        debug!("evaluate_obligation_no_overflow(obligation={:?})", obligation);
         match self.evaluate_obligation(obligation) {
             Ok(result) => result,
             Err(OverflowError) => {

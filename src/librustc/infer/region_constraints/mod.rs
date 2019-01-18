@@ -680,6 +680,10 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
             sub, sup, origin
         );
 
+        if let SubregionOrigin::Subtype(ref trace) = origin {
+            debug!("RegionConstraintCollector: make_subregion - trace values: {:?}", trace.values);
+        }
+
         match (sub, sup) {
             (&ReLateBound(..), _) | (_, &ReLateBound(..)) => {
                 span_bug!(

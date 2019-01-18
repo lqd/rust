@@ -19,6 +19,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     // Requires that the two types unify, and prints an error message if
     // they don't.
     pub fn demand_suptype(&self, sp: Span, expected: Ty<'tcx>, actual: Ty<'tcx>) {
+        debug!("demand_suptype(expected={:?}, actual={:?})", expected, actual);
         self.demand_suptype_diag(sp, expected, actual).map(|mut e| e.emit());
     }
 
@@ -26,6 +27,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                sp: Span,
                                expected: Ty<'tcx>,
                                actual: Ty<'tcx>) -> Option<DiagnosticBuilder<'tcx>> {
+        debug!("demand_suptype_diag(expected={:?}, actual={:?})", expected, actual);
         let cause = &self.misc(sp);
         match self.at(cause, self.param_env).sup(expected, actual) {
             Ok(InferOk { obligations, value: () }) => {
@@ -39,6 +41,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn demand_eqtype(&self, sp: Span, expected: Ty<'tcx>, actual: Ty<'tcx>) {
+        debug!("demand_eqtype(expected={:?}, actual={:?})", expected, actual);
         if let Some(mut err) = self.demand_eqtype_diag(sp, expected, actual) {
             err.emit();
         }
@@ -48,6 +51,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                              sp: Span,
                              expected: Ty<'tcx>,
                              actual: Ty<'tcx>) -> Option<DiagnosticBuilder<'tcx>> {
+        debug!("demand_eqtype_diag(expected={:?}, actual={:?})", expected, actual);
         self.demand_eqtype_with_origin(&self.misc(sp), expected, actual)
     }
 
@@ -55,6 +59,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                      cause: &ObligationCause<'tcx>,
                                      expected: Ty<'tcx>,
                                      actual: Ty<'tcx>) -> Option<DiagnosticBuilder<'tcx>> {
+        debug!("demand_eqtype_with_origin(expected={:?}, actual={:?})", expected, actual);
         match self.at(cause, self.param_env).eq(expected, actual) {
             Ok(InferOk { obligations, value: () }) => {
                 self.register_predicates(obligations);

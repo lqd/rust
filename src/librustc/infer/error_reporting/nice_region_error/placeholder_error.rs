@@ -14,6 +14,7 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
     /// When given a `ConcreteFailure` for a function with arguments containing a named region and
     /// an anonymous region, emit an descriptive diagnostic error.
     pub(super) fn try_report_placeholder_conflict(&self) -> Option<ErrorReported> {
+        debug!("try_report_placeholder_conflict(error={:?})", self.error);
         match &self.error {
             ///////////////////////////////////////////////////////////////////////////
             // NB. The ordering of cases in this match is very
@@ -85,6 +86,36 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
             ))
                 if expected.def_id == found.def_id =>
             {
+                Some(self.try_report_placeholders_trait(
+                    Some(self.tcx.mk_region(ty::ReVar(*vid))),
+                    cause,
+                    None,
+                    Some(*sup_placeholder),
+                    expected.def_id,
+                    expected.substs,
+                    found.substs,
+                ))
+            }
+
+            Some(RegionResolutionError::SubSupConflict(
+                vid,
+                _,
+                _,
+                _,
+                SubregionOrigin::Subtype(TypeTrace {
+                    cause,
+                    values: ValuePairs::TraitRefs(ExpectedFound { expected, found }),
+                }),
+                sup_placeholder @ ty::RePlaceholder(_),
+            ))
+                if expected.def_id == found.def_id =>
+            {
+                debug!("try_report_placeholder_conflict - SubSupConflict 3.5, expected={:?}, found={:?}", expected, found);
+                // Currently `try_report_placeholders_trait` emits errors tailored for the case
+                // where the Subtype sub-region origin is the `sub` region. In certain higher-rank
+                // situations, the origin can be the `sup` placeholder, and in this case the
+                // `expected` and `found` TraitRefs need to be inverted: the more general of the
+                // two is the `found` TraitRef.
                 Some(self.try_report_placeholders_trait(
                     Some(self.tcx.mk_region(ty::ReVar(*vid))),
                     cause,

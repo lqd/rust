@@ -628,6 +628,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         &mut self,
         obligation: &PredicateObligation<'tcx>,
     ) -> Result<EvaluationResult, OverflowError> {
+        debug!("evaluate_obligation_recursively({:?})", obligation);
         self.evaluation_probe(|this| {
             this.evaluate_predicate_recursively(TraitObligationStackList::empty(), obligation)
         })
@@ -658,6 +659,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         I: IntoIterator<Item = &'a PredicateObligation<'tcx>>,
         'tcx: 'a,
     {
+        debug!("evaluate_predicates_recursively");
         let mut result = EvaluatedToOk;
         for obligation in predicates {
             let eval = self.evaluate_predicate_recursively(stack, obligation)?;

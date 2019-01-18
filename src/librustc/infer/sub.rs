@@ -18,6 +18,8 @@ impl<'combine, 'infcx, 'gcx, 'tcx> Sub<'combine, 'infcx, 'gcx, 'tcx> {
     pub fn new(f: &'combine mut CombineFields<'infcx, 'gcx, 'tcx>, a_is_expected: bool)
         -> Sub<'combine, 'infcx, 'gcx, 'tcx>
     {
+
+        debug!("new Sub struct with trace {:?}, values: {:?}", f.trace, f.trace.values);
         Sub { fields: f, a_is_expected: a_is_expected }
     }
 
@@ -69,6 +71,7 @@ impl<'combine, 'infcx, 'gcx, 'tcx> TypeRelation<'infcx, 'gcx, 'tcx>
         let infcx = self.fields.infcx;
         let a = infcx.type_variables.borrow_mut().replace_if_possible(a);
         let b = infcx.type_variables.borrow_mut().replace_if_possible(b);
+        debug!("{}.tys - replace_if_possible a={:?}, b={:?}", self.tag(), a, b);
         match (&a.sty, &b.sty) {
             (&ty::Infer(TyVar(a_vid)), &ty::Infer(TyVar(b_vid))) => {
                 // Shouldn't have any LBR here, so we can safely put

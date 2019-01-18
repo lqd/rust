@@ -1442,8 +1442,10 @@ fn confirm_param_env_candidate<'cx, 'gcx, 'tcx>(
 
     let cache_trait_ref = cache_entry.projection_ty.trait_ref(infcx.tcx);
     let obligation_trait_ref = obligation.predicate.trait_ref(infcx.tcx);
+    debug!("confirm_param_env_candidate(cache_trait_ref={:?}, obligation_trait_ref={:?})", cache_trait_ref, obligation_trait_ref);
     match infcx.at(cause, param_env).eq(cache_trait_ref, obligation_trait_ref) {
         Ok(InferOk { value: _, obligations }) => {
+            debug!("confirm_param_env_candidate - InferOk, obligations = {:?}", obligations);
             Progress {
                 ty: cache_entry.ty,
                 obligations,

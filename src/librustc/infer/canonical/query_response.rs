@@ -282,6 +282,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
     where
         R: Debug + TypeFoldable<'tcx>,
     {
+        debug!("instantiate_nll_query_response_and_region_obligations(cause={:?})", cause);
         let result_subst =
             self.query_response_substitution_guess(cause, original_values, query_response);
 
@@ -297,10 +298,12 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
             });
             match (original_value.unpack(), result_value.unpack()) {
                 (UnpackedKind::Lifetime(ty::ReErased), UnpackedKind::Lifetime(ty::ReErased)) => {
+                    debug!("instantiate_nll_query_response_and_region_obligations - UnpackedKind::Lifetime ReErased");
                     // no action needed
                 }
 
                 (UnpackedKind::Lifetime(v_o), UnpackedKind::Lifetime(v_r)) => {
+                    debug!("instantiate_nll_query_response_and_region_obligations - UnpackedKind::Lifetime");
                     // To make `v_o = v_r`, we emit `v_o: v_r` and `v_r: v_o`.
                     if v_o != v_r {
                         output_query_region_constraints
@@ -311,6 +314,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
                 }
 
                 (UnpackedKind::Type(v1), UnpackedKind::Type(v2)) => {
+                    debug!("instantiate_nll_query_response_and_region_obligations - UnpackedKind::Type");
                     let ok = self.at(cause, param_env).eq(v1, v2)?;
                     obligations.extend(ok.into_obligations());
                 }
@@ -582,6 +586,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
         variables1: &OriginalQueryValues<'tcx>,
         variables2: impl Fn(BoundVar) -> Kind<'tcx>,
     ) -> InferResult<'tcx, ()> {
+        debug!("unify_canonical_vars(cause={:?})", cause);
         self.commit_if_ok(|_| {
             let mut obligations = vec![];
             for (index, value1) in variables1.var_values.iter().enumerate() {
@@ -589,6 +594,7 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
 
                 match (value1.unpack(), value2.unpack()) {
                     (UnpackedKind::Type(v1), UnpackedKind::Type(v2)) => {
+                        debug!("unify_canonical_vars - UnpackedKind::Type");
                         obligations
                             .extend(self.at(cause, param_env).eq(v1, v2)?.into_obligations());
                     }
@@ -596,9 +602,11 @@ impl<'cx, 'gcx, 'tcx> InferCtxt<'cx, 'gcx, 'tcx> {
                         UnpackedKind::Lifetime(ty::ReErased),
                         UnpackedKind::Lifetime(ty::ReErased),
                     ) => {
+                        debug!("unify_canonical_vars - UnpackedKind::Lifetime(ReErased)");
                         // no action needed
                     }
                     (UnpackedKind::Lifetime(v1), UnpackedKind::Lifetime(v2)) => {
+                        debug!("unify_canonical_vars - UnpackedKind::Lifetime()");
                         obligations
                             .extend(self.at(cause, param_env).eq(v1, v2)?.into_obligations());
                     }
