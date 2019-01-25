@@ -14,7 +14,6 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
     /// When given a `ConcreteFailure` for a function with arguments containing a named region and
     /// an anonymous region, emit an descriptive diagnostic error.
     pub(super) fn try_report_placeholder_conflict(&self) -> Option<ErrorReported> {
-        debug!("try_report_placeholder_conflict(error={:?})", self.error);
         match &self.error {
             ///////////////////////////////////////////////////////////////////////////
             // NB. The ordering of cases in this match is very
@@ -110,12 +109,6 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
             ))
                 if expected.def_id == found.def_id =>
             {
-                debug!("try_report_placeholder_conflict - SubSupConflict 3.5, expected={:?}, found={:?}", expected, found);
-                // Currently `try_report_placeholders_trait` emits errors tailored for the case
-                // where the Subtype sub-region origin is the `sub` region. In certain higher-rank
-                // situations, the origin can be the `sup` placeholder, and sometimes
-                // `expected` and `found` TraitRefs seem to be inverted and the more general of the
-                // two is the `found` TraitRef.
                 Some(self.try_report_placeholders_trait(
                     Some(self.tcx.mk_region(ty::ReVar(*vid))),
                     cause,
@@ -231,14 +224,19 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
             _ => (),
         }
 
-        let expected_trait_ref = ty::TraitRef {
-            def_id: trait_def_id,
-            substs: expected_substs,
-        };
-        let actual_trait_ref = ty::TraitRef {
-            def_id: trait_def_id,
-            substs: actual_substs,
-        };
+        let expected_trait_ref = self.infcx.resolve_type_vars_if_possible(
+            &ty::TraitRef {
+                def_id: trait_def_id,
+                substs: expected_substs,
+            }
+        );
+
+        let actual_trait_ref = self.infcx.resolve_type_vars_if_possible(
+            &ty::TraitRef {
+                def_id: trait_def_id,
+                substs: actual_substs,
+            }
+        );
 
         // Search the expected and actual trait references to see (a)
         // whether the sub/sup placeholders appear in them (sometimes
@@ -249,7 +247,9 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
         let mut counter = 0;
         let mut has_sub = None;
         let mut has_sup = None;
-        let mut has_vid = None;
+
+        let mut actual_has_vid = None;
+        let mut expected_has_vid = None;
 
         self.tcx.for_each_free_region(&expected_trait_ref, |r| {
             if Some(r) == sub_placeholder && has_sub.is_none() {
@@ -259,11 +259,16 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
                 has_sup = Some(counter);
                 counter += 1;
             }
+
+            if Some(r) == vid && expected_has_vid.is_none() {
+                expected_has_vid = Some(counter);
+                counter += 1;
+            }
         });
 
         self.tcx.for_each_free_region(&actual_trait_ref, |r| {
-            if Some(r) == vid && has_vid.is_none() {
-                has_vid = Some(counter);
+            if Some(r) == vid && actual_has_vid.is_none() {
+                actual_has_vid = Some(counter);
                 counter += 1;
             }
         });
@@ -277,60 +282,67 @@ impl NiceRegionError<'me, 'gcx, 'tcx> {
                 match (has_sub, has_sup) {
                     (Some(n1), Some(n2)) => {
                         err.note(&format!(
-                            "`{}` must implement `{}` \
-                             for any two lifetimes `'{}` and `'{}`",
-                            expected_trait_ref.self_ty(),
+                            "`{}` would have to be implemented for the type `{}`, \
+                            for any two lifetimes `'{}` and `'{}`",
                             expected_trait_ref,
+                            expected_trait_ref.self_ty(),
                             std::cmp::min(n1, n2),
                             std::cmp::max(n1, n2),
                         ));
                     }
                     (Some(n), _) | (_, Some(n)) => {
                         err.note(&format!(
-                            "`{}` must implement `{}` \
-                             for any lifetime `'{}`",
-                            expected_trait_ref.self_ty(),
+                            "`{}` would have to be implemented for the type `{}`, \
+                            for any lifetime `'{}`",
                             expected_trait_ref,
+                            expected_trait_ref.self_ty(),
                             n,
                         ));
                     }
                     (None, None) => {
                         err.note(&format!(
-                            "`{}` must implement `{}`",
-                            expected_trait_ref.self_ty(),
+                            "`{}` would have to be implemented for the type `{}`",
                             expected_trait_ref,
+                            expected_trait_ref.self_ty(),
                         ));
                     }
                 }
             })
         });
 
-        RegionHighlightMode::maybe_highlighting_region(vid, has_vid, || match has_vid {
-            Some(n) => {
-                if self_ty_has_vid {
+        RegionHighlightMode::maybe_highlighting_region(
+            vid,
+            actual_has_vid.or(expected_has_vid),
+            || match actual_has_vid {
+                Some(n) => {
+                    if self_ty_has_vid {
+                        err.note(&format!(
+                            "but `{}` is actually implemented for the type `{}`, \
+                            for the specific lifetime `'{}`",
+                            actual_trait_ref,
+                            actual_trait_ref.self_ty(),
+                            n
+                        ));
+                    } else {
+                        err.note(&format!(
+                            "but `{}` is actually implemented for the type `{}`, \
+                            for some lifetime `'{}`",
+                            actual_trait_ref,
+                            actual_trait_ref.self_ty(),
+                            n
+                        ));
+                    }
+                }
+
+                _ => {
                     err.note(&format!(
-                        "but `{}` only implements `{}` for the lifetime `'{}`",
-                        actual_trait_ref.self_ty(),
+                        "but `{}` is actually implemented for the type `{}`",
                         actual_trait_ref,
-                        n
-                    ));
-                } else {
-                    err.note(&format!(
-                        "but `{}` only implements `{}` for some lifetime `'{}`",
                         actual_trait_ref.self_ty(),
-                        actual_trait_ref,
-                        n
                     ));
                 }
             }
-            None => {
-                err.note(&format!(
-                    "but `{}` only implements `{}`",
-                    actual_trait_ref.self_ty(),
-                    actual_trait_ref,
-                ));
-            }
-        });
+        );
 
         err.emit();
         ErrorReported
