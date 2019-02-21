@@ -514,7 +514,13 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
                        that is not used is not a problem, so if this rule
                        starts to create problems we'll have to revisit
                        this portion of the code and think hard about it. =) */
-                    self.collect_error_for_expanding_node(graph, &mut dup_vec, node_vid, errors);
+                    self.collect_error_for_expanding_node(
+                        graph,
+                        var_data,
+                        &mut dup_vec,
+                        node_vid,
+                        errors,
+                    );
                 }
             }
         }
@@ -565,6 +571,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
     fn collect_error_for_expanding_node(
         &self,
         graph: &RegionGraph<'tcx>,
+        var_data: &LexicalRegionResolutions<'tcx>,
         dup_vec: &mut [u32],
         node_idx: RegionVid,
         errors: &mut Vec<RegionResolutionError<'tcx>>,
@@ -572,9 +579,9 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
         // Errors in expanding nodes result from a lower-bound that is
         // not contained by an upper-bound.
         let (mut lower_bounds, lower_dup) =
-            self.collect_concrete_regions(graph, node_idx, INCOMING, dup_vec);
+            self.collect_concrete_regions(graph, var_data, node_idx, INCOMING, dup_vec);
         let (mut upper_bounds, upper_dup) =
-            self.collect_concrete_regions(graph, node_idx, OUTGOING, dup_vec);
+            self.collect_concrete_regions(graph, var_data, node_idx, OUTGOING, dup_vec);
 
         if lower_dup || upper_dup {
             return;
@@ -644,6 +651,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
     fn collect_concrete_regions(
         &self,
         graph: &RegionGraph<'tcx>,
+        var_data: &LexicalRegionResolutions<'tcx>,
         orig_node_idx: RegionVid,
         dir: Direction,
         dup_vec: &mut [u32],
@@ -664,7 +672,15 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
 
         // to start off the process, walk the source node in the
         // direction specified
-        process_edges(&self.data, &mut state, graph, orig_node_idx, dir);
+        process_edges(
+            &self.data,
+            &mut state,
+            graph,
+            &self.var_infos,
+            var_data,
+            orig_node_idx,
+            dir,
+        );
 
         while !state.stack.is_empty() {
             let node_idx = state.stack.pop().unwrap();
@@ -681,7 +697,7 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
                 orig_node_idx, node_idx
             );
 
-            process_edges(&self.data, &mut state, graph, node_idx, dir);
+            process_edges(&self.data, &mut state, graph, &self.var_infos, var_data, node_idx, dir);
         }
 
         let WalkState {
@@ -693,6 +709,8 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
             this: &RegionConstraintData<'tcx>,
             state: &mut WalkState<'tcx>,
             graph: &RegionGraph<'tcx>,
+            var_infos: &VarInfos,
+            var_data: &LexicalRegionResolutions<'tcx>,
             source_vid: RegionVid,
             dir: Direction,
         ) {
@@ -709,6 +727,70 @@ impl<'cx, 'gcx, 'tcx> LexicalResolver<'cx, 'gcx, 'tcx> {
                         };
                         if state.set.insert(opp_vid) {
                             state.stack.push(opp_vid);
+
+                            // Before Universes, the `VarSubVar` constraints were generally
+                            // ignored, but can now lead to cases like issue #58451: a placeholder
+                            // region, and 2 inference variables, only one of which can name the
+                            // placeholder's universe.
+                            //
+                            // From the issue, we have:
+                            // - `'1` in U4
+                            // - `'2` in U6
+                            // - `'!1`, the placeholder in U6
+                            //
+                            // With these constraints:
+                            //
+                            //       +--------+
+                            //       v        |
+                            //       '1 +---> '2 +---> '!1
+                            //                ^         |
+                            //                +---------+
+                            //
+                            // Resolving the regions will go through these steps:
+                            // 1) `'1` is expanded to `'static`.
+                            // 2) `'2` is in turn updated to `'static`.
+                            // 3) We cannot verify `'2` <= `'!1` and is the error we need
+                            //    to emit.
+                            // 4) We walk the constraint graph, to look for lower and upper bounds
+                            //    for the `orig_node_idx` vid: ignoring the `VarSubVar` between
+                            //    `'1` and `'2` focuses on the `RegSubVar` and `VarSubReg` between
+                            //    `'2` and `'!1`, which will be selected as the lower and
+                            //    upper bounds.
+                            // In `collect_error_for_expanding_node`, we'd look for the two regions
+                            // `R1` and `R2` where `R2: X: R1` but `R2: R1` is false.
+                            // The current graph walking will find `R1` == `R2` == `'!1` as the 
+                            // lower and upper bounds: there wouldn't be an `X` lower bound
+                            // that is not contained by an upper bound, there would be no
+                            // `SubSupConflict`.
+                            //
+                            // Therefore, we look at the `VarSubVar` constraints a bit more
+                            // closely: if a var in error is a subregion of a var with a `'static`
+                            // value, we'll look at their universes compatibility, to have a
+                            // `'static` lower bound to compare to the successors.
+
+                            if var_infos[opp_vid]
+                                .universe
+                                .cannot_name(var_infos[source_vid].universe)
+                            {
+                                let source_val = var_data.value(source_vid);
+                                let opp_val = var_data.value(opp_vid);
+                                match (source_val, opp_val) {
+                                    (VarValue::ErrorValue, VarValue::Value(region)) => {
+                                        if *region == &ReStatic {
+                                            state.result.push(RegionAndOrigin {
+                                                region,
+                                                origin: this
+                                                    .constraints
+                                                    .get(&edge.data)
+                                                    .unwrap()
+                                                    .clone(),
+                                            });
+                                        }
+                                    }
+
+                                    _ => {}
+                                }
+                            }
                         }
                     }
 
