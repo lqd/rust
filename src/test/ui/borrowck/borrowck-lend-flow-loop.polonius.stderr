@@ -1,0 +1,51 @@
+error[E0502]: cannot borrow `*v` as immutable because it is also borrowed as mutable
+  --> $DIR/borrowck-lend-flow-loop.rs:29:16
+   |
+LL |     let mut x = &mut v;
+   |                 ------ mutable borrow occurs here
+LL |     for _ in 0..3 {
+LL |         borrow(&*v);
+   |                ^^^ immutable borrow occurs here
+LL |     }
+LL |     *x = box 5;
+   |     -- mutable borrow later used here
+
+error[E0502]: cannot borrow `*v` as immutable because it is also borrowed as mutable
+  --> $DIR/borrowck-lend-flow-loop.rs:92:16
+   |
+LL |         **x += 1;
+   |         -------- mutable borrow later used here
+LL |         borrow(&*v);
+   |                ^^^ immutable borrow occurs here
+LL |         if cond2 {
+LL |             x = &mut v; // OK
+   |                 ------ mutable borrow occurs here
+
+error[E0499]: cannot borrow `*r` as mutable more than once at a time
+  --> $DIR/borrowck-lend-flow-loop.rs:109:19
+   |
+LL | fn loop_break_pops_scopes<'r, F>(_v: &'r mut [usize], mut f: F) where
+   |                           -- lifetime `'r` defined here
+...
+LL |             if !f(&mut *r) {
+   |                 --^^^^^^^-
+   |                 | |
+   |                 | mutable borrow starts here in previous iteration of loop
+   |                 argument requires that `*r` is borrowed for `'r`
+
+error[E0499]: cannot borrow `*r` as mutable more than once at a time
+  --> $DIR/borrowck-lend-flow-loop.rs:125:19
+   |
+LL | fn loop_loop_pops_scopes<'r, F>(_v: &'r mut [usize], mut f: F)
+   |                          -- lifetime `'r` defined here
+...
+LL |             if !f(&mut *r) {
+   |                 --^^^^^^^-
+   |                 | |
+   |                 | mutable borrow starts here in previous iteration of loop
+   |                 argument requires that `*r` is borrowed for `'r`
+
+error: aborting due to 4 previous errors
+
+Some errors have detailed explanations: E0499, E0502.
+For more information about an error, try `rustc --explain E0499`.
