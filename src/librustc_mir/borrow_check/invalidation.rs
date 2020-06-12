@@ -28,6 +28,7 @@ pub(super) fn generate_invalidates<'tcx>(
 
     if let Some(all_facts) = all_facts {
         let _prof_timer = tcx.prof.generic_activity("polonius_fact_generation");
+        rustc_data_structures::profile_scope!("polonius_fact_generation");
         let dominators = body.dominators();
         let mut ig = InvalidationGenerator {
             all_facts,

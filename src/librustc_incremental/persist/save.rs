@@ -32,13 +32,15 @@ pub fn save_dep_graph(tcx: TyCtxt<'_>) {
         join(
             move || {
                 sess.time("incr_comp_persist_result_cache", || {
+                    rustc_data_structures::profile_scope!("incr_comp_persist_result_cache");
                     save_in(sess, query_cache_path, |e| encode_query_cache(tcx, e));
                 });
             },
             || {
                 sess.time("incr_comp_persist_dep_graph", || {
+                    rustc_data_structures::profile_scope!("incr_comp_persist_dep_graph");
                     save_in(sess, dep_graph_path, |e| {
-                        sess.time("incr_comp_encode_dep_graph", || encode_dep_graph(tcx, e))
+                        sess.time("incr_comp_encode_dep_graph", || { rustc_data_structures::profile_scope!("incr_comp_encode_dep_graph"); encode_dep_graph(tcx, e) })
                     });
                 });
             },
@@ -140,7 +142,7 @@ fn encode_dep_graph(tcx: TyCtxt<'_>, encoder: &mut Encoder) {
 
     // Encode the graph data.
     let serialized_graph =
-        tcx.sess.time("incr_comp_serialize_dep_graph", || tcx.dep_graph.serialize());
+        tcx.sess.time("incr_comp_serialize_dep_graph", || { rustc_data_structures::profile_scope!("incr_comp_serialize_dep_graph"); tcx.dep_graph.serialize() });
 
     if tcx.sess.opts.debugging_opts.incremental_info {
         #[derive(Clone)]
@@ -222,6 +224,7 @@ fn encode_dep_graph(tcx: TyCtxt<'_>, encoder: &mut Encoder) {
     }
 
     tcx.sess.time("incr_comp_encode_serialized_dep_graph", || {
+        rustc_data_structures::profile_scope!("incr_comp_encode_serialized_dep_graph");
         serialized_graph.encode(encoder).unwrap();
     });
 }
@@ -243,6 +246,7 @@ fn encode_work_product_index(
 
 fn encode_query_cache(tcx: TyCtxt<'_>, encoder: &mut Encoder) {
     tcx.sess.time("incr_comp_serialize_result_cache", || {
+        rustc_data_structures::profile_scope!("incr_comp_serialize_result_cache");
         tcx.serialize_query_result_cache(encoder).unwrap();
     })
 }

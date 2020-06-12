@@ -468,12 +468,14 @@ pub fn check_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(
     join(
         || {
             tcx.sess.time("crate_lints", || {
+                rustc_data_structures::profile_scope!("crate_lints");
                 // Run whole crate non-incremental lints
                 late_lint_crate(tcx, builtin_lints());
             });
         },
         || {
             tcx.sess.time("module_lints", || {
+                rustc_data_structures::profile_scope!("module_lints");
                 // Run per-module lints
                 par_iter(&tcx.hir().krate().modules).for_each(|(&module, _)| {
                     tcx.ensure().lint_mod(tcx.hir().local_def_id(module));

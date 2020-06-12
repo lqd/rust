@@ -199,6 +199,7 @@ impl<'sess> OnDiskCache<'sess> {
             let mut query_result_index = EncodedQueryResultIndex::new();
 
             tcx.sess.time("encode_query_results", || {
+                rustc_data_structures::profile_scope!("encode_query_results");
                 let enc = &mut encoder;
                 let qri = &mut query_result_index;
 

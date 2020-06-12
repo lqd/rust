@@ -103,6 +103,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
     }
 
     let _timer = sess.prof.generic_activity("incr_comp_prepare_load_dep_graph");
+    rustc_data_structures::profile_scope!("incr_comp_prepare_load_dep_graph");
 
     // Calling `sess.incr_comp_session_dir()` will panic if `sess.opts.incremental.is_none()`.
     // Fortunately, we just checked that this isn't the case.
@@ -162,6 +163,7 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
 
     MaybeAsync::Async(std::thread::spawn(move || {
         let _prof_timer = prof.generic_activity("incr_comp_load_dep_graph");
+        rustc_data_structures::profile_scope!("incr_comp_load_dep_graph");
 
         match load_data(report_incremental_info, &path) {
             LoadResult::DataOutOfDate => LoadResult::DataOutOfDate,
@@ -200,6 +202,7 @@ pub fn load_query_result_cache(sess: &Session) -> OnDiskCache<'_> {
     }
 
     let _prof_timer = sess.prof.generic_activity("incr_comp_load_query_result_cache");
+    rustc_data_structures::profile_scope!("incr_comp_load_query_result_cache");
 
     match load_data(sess.opts.debugging_opts.incremental_info, &query_cache_path(sess)) {
         LoadResult::Ok { data: (bytes, start_pos) } => OnDiskCache::new(sess, bytes, start_pos),

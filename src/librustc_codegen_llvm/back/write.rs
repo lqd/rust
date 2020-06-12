@@ -435,6 +435,7 @@ pub(crate) unsafe fn optimize(
     config: &ModuleConfig,
 ) -> Result<(), FatalError> {
     let _timer = cgcx.prof.generic_activity_with_arg("LLVM_module_optimize", &module.name[..]);
+    rustc_data_structures::profile_scope!("LLVM_module_optimize");
 
     let llmod = module.module_llvm.llmod();
     let llcx = &*module.module_llvm.llcx;
@@ -615,6 +616,7 @@ pub(crate) unsafe fn codegen(
     config: &ModuleConfig,
 ) -> Result<CompiledModule, FatalError> {
     let _timer = cgcx.prof.generic_activity_with_arg("LLVM_module_codegen", &module.name[..]);
+    rustc_data_structures::profile_scope!("LLVM_module_codegen");
     {
         let llmod = module.module_llvm.llmod();
         let llcx = &*module.module_llvm.llcx;
@@ -672,6 +674,7 @@ pub(crate) unsafe fn codegen(
                     "LLVM_module_codegen_emit_bitcode",
                     &module.name[..],
                 );
+                rustc_data_structures::profile_scope!("LLVM_module_codegen_emit_bitcode");
                 if let Err(e) = fs::write(&bc_out, data) {
                     let msg = format!("failed to write bytecode to {}: {}", bc_out.display(), e);
                     diag_handler.err(&msg);
@@ -683,6 +686,7 @@ pub(crate) unsafe fn codegen(
                     "LLVM_module_codegen_embed_bitcode",
                     &module.name[..],
                 );
+                rustc_data_structures::profile_scope!("LLVM_module_codegen_embed_bitcode");
                 embed_bitcode(cgcx, llcx, llmod, &config.bc_cmdline, data);
             }
         }

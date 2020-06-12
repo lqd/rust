@@ -953,6 +953,7 @@ pub(super) fn index_hir<'tcx>(tcx: TyCtxt<'tcx>, cnum: CrateNum) -> &'tcx Indexe
     assert_eq!(cnum, LOCAL_CRATE);
 
     let _prof_timer = tcx.sess.prof.generic_activity("build_hir_map");
+    rustc_data_structures::profile_scope!("build_hir_map");
 
     let (map, crate_hash) = {
         let hcx = tcx.create_stable_hashing_context();

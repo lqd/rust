@@ -277,6 +277,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         }
 
         sess.time("serialize_work_products", move || {
+            rustc_data_structures::profile_scope!("serialize_work_products");
             rustc_incremental::save_work_product_index(sess, &dep_graph, work_products)
         });
 
@@ -310,6 +311,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         // Run the linker on any artifacts that resulted from the LLVM run.
         // This should produce either a finished executable or library.
         sess.time("link_crate", || {
+            rustc_data_structures::profile_scope!("link_crate");
             use crate::back::archive::LlvmArchiveBuilder;
             use rustc_codegen_ssa::back::link::link_binary;
 
@@ -328,6 +330,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         rustc_incremental::finalize_session_directory(sess, codegen_results.crate_hash);
 
         sess.time("llvm_dump_timing_file", || {
+            rustc_data_structures::profile_scope!("llvm_dump_timing_file");
             if sess.opts.debugging_opts.llvm_time_trace {
                 llvm_util::time_trace_profiler_finish("llvm_timings.json");
             }

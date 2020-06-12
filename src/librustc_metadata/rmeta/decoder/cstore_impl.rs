@@ -403,6 +403,7 @@ impl CStore {
 
     pub fn load_macro_untracked(&self, id: DefId, sess: &Session) -> LoadedMacro {
         let _prof_timer = sess.prof.generic_activity("metadata_load_macro");
+        rustc_data_structures::profile_scope!("metadata_load_macro");
 
         let data = self.get_crate_data(id.krate);
         if data.root.is_proc_macro_crate() {

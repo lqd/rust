@@ -329,6 +329,7 @@ impl<'a> CrateLoader<'a> {
         name: Symbol,
     ) -> CrateNum {
         let _prof_timer = self.sess.prof.generic_activity("metadata_register_crate");
+        rustc_data_structures::profile_scope!("metadata_register_crate");
 
         let Library { source, metadata } = lib;
         let crate_root = metadata.get_root();

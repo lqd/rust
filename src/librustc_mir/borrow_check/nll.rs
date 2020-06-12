@@ -192,6 +192,7 @@ pub(in crate::borrow_check) fn compute_regions<'cx, 'tcx>(
 
     if let Some(all_facts) = &mut all_facts {
         let _prof_timer = infcx.tcx.prof.generic_activity("polonius_fact_generation");
+        rustc_data_structures::profile_scope!("polonius_fact_generation");
         all_facts.universal_region.extend(universal_regions.universal_regions());
         populate_polonius_move_facts(all_facts, move_data, location_table, &body);
 
@@ -284,6 +285,7 @@ pub(in crate::borrow_check) fn compute_regions<'cx, 'tcx>(
             let algorithm = Algorithm::from_str(&algorithm).unwrap();
             debug!("compute_regions: using polonius algorithm {:?}", algorithm);
             let _prof_timer = infcx.tcx.prof.generic_activity("polonius_analysis");
+            rustc_data_structures::profile_scope!("polonius_analysis");
             Some(Rc::new(Output::compute(&all_facts, algorithm, false)))
         } else {
             None

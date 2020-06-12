@@ -182,6 +182,139 @@ pub struct SelfProfilerRef {
     print_extra_verbose_generic_activities: bool,
 }
 
+pub mod tracy {
+    use minidl::Library;
+
+    // Must match `___tracy_source_location_data` struct in TracyC.h
+    #[repr(C)]
+    pub struct SourceLocation {
+        pub name: *const u8,
+        pub function: *const u8,
+        pub file: *const u8,
+        pub line: u32,
+        pub color: u32,
+    }
+
+    // Must match `___tracy_c_zone_context` in TracyC.h
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct ZoneContext {
+        id: u32,
+        active: i32,
+    }
+
+    // Define a set of no-op implementation functions that are called if the tracy
+    // shared library is not loaded.
+    extern "C" fn unimpl_mark_frame(_: *const u8) {}
+    extern "C" fn unimpl_mark_frame_start(_: *const u8) {}
+    extern "C" fn unimpl_mark_frame_end(_: *const u8) {}
+    extern "C" fn unimpl_zone_begin(_: *const SourceLocation, _: i32) -> ZoneContext {
+        ZoneContext { id: 0, active: 0 }
+    }
+    extern "C" fn unimpl_zone_begin_callstack(
+        _: *const SourceLocation,
+        _: i32,
+        _: i32,
+    ) -> ZoneContext {
+        ZoneContext { id: 0, active: 0 }
+    }
+    extern "C" fn unimpl_zone_end(_: ZoneContext) {}
+    extern "C" fn unimpl_zone_text(_: ZoneContext, _: *const u8, _: usize) {}
+    extern "C" fn unimpl_memory_alloc(_: *const u8, _: usize) {}
+    extern "C" fn unimpl_memory_free(_: *const u8) {}
+    extern "C" fn unimpl_memory_alloc_callstack(_: *const u8, _: usize, _: i32) {}
+    extern "C" fn unimpl_memory_free_callstack(_: *const u8, _: i32) {}
+
+    // Function pointers to the tracy API functions (if loaded), or the no-op functions above.
+    pub static mut MARK_FRAME: extern "C" fn(name: *const u8) = unimpl_mark_frame;
+    pub static mut MARK_FRAME_START: extern "C" fn(name: *const u8) = unimpl_mark_frame_start;
+    pub static mut MARK_FRAME_END: extern "C" fn(name: *const u8) = unimpl_mark_frame_end;
+    pub static mut EMIT_ZONE_BEGIN: extern "C" fn(
+        srcloc: *const SourceLocation,
+        active: i32,
+    ) -> ZoneContext = unimpl_zone_begin;
+    pub static mut EMIT_ZONE_BEGIN_CALLSTACK: extern "C" fn(
+        srcloc: *const SourceLocation,
+        depth: i32,
+        active: i32,
+    ) -> ZoneContext = unimpl_zone_begin_callstack;
+    pub static mut EMIT_ZONE_END: extern "C" fn(ctx: ZoneContext) = unimpl_zone_end;
+    pub static mut EMIT_ZONE_TEXT: extern "C" fn(ctx: ZoneContext, txt: *const u8, size: usize) =
+        unimpl_zone_text;
+    pub static mut EMIT_MEMORY_ALLOC: extern "C" fn(ptr: *const u8, size: usize) =
+        unimpl_memory_alloc;
+    pub static mut EMIT_MEMORY_FREE: extern "C" fn(ptr: *const u8) = unimpl_memory_free;
+    pub static mut EMIT_MEMORY_ALLOC_CALLSTACK: extern "C" fn(
+        ptr: *const u8,
+        size: usize,
+        depth: i32,
+    ) = unimpl_memory_alloc_callstack;
+    pub static mut EMIT_MEMORY_FREE_CALLSTACK: extern "C" fn(ptr: *const u8, depth: i32) =
+        unimpl_memory_free_callstack;
+
+    // Load the tracy library, and get function pointers. This is unsafe since:
+    // - It must not be called while other threads are calling the functions.
+    // - It doesn't ensure that the library is not unloaded during use.
+    unsafe fn load(path: &str) -> bool {
+        match Library::load(path) {
+            Ok(lib) => {
+                // If lib loading succeeds, assume we can find all the symbols required.
+                MARK_FRAME = lib.sym("___tracy_emit_frame_mark\0").unwrap();
+                MARK_FRAME_START = lib.sym("___tracy_emit_frame_mark_start\0").unwrap();
+                MARK_FRAME_END = lib.sym("___tracy_emit_frame_mark_end\0").unwrap();
+                EMIT_ZONE_BEGIN = lib.sym("___tracy_emit_zone_begin\0").unwrap();
+                EMIT_ZONE_BEGIN_CALLSTACK =
+                    lib.sym("___tracy_emit_zone_begin_callstack\0").unwrap();
+                EMIT_ZONE_END = lib.sym("___tracy_emit_zone_end\0").unwrap();
+                EMIT_ZONE_TEXT = lib.sym("___tracy_emit_zone_text\0").unwrap();
+                EMIT_MEMORY_ALLOC = lib.sym("___tracy_emit_memory_alloc\0").unwrap();
+                EMIT_MEMORY_FREE = lib.sym("___tracy_emit_memory_free\0").unwrap();
+                EMIT_MEMORY_ALLOC_CALLSTACK =
+                    lib.sym("___tracy_emit_memory_alloc_callstack\0").unwrap();
+                EMIT_MEMORY_FREE_CALLSTACK =
+                    lib.sym("___tracy_emit_memory_free_callstack\0").unwrap();
+
+                true
+            }
+            Err(..) => {
+                println!("Failed to load the tracy profiling library!");
+                false
+            }
+        }
+    }
+
+    pub fn start(path: &str) -> bool {
+        let loaded = unsafe { load(path) };
+        // assert!(loaded);
+        loaded
+    }
+
+    /// A simple stack scope for tracing function execution time
+    pub struct ProfileScope {
+        ctx: ZoneContext,
+    }
+
+    impl ProfileScope {
+        pub fn new(callsite: &'static SourceLocation) -> Self {
+            let ctx = unsafe { EMIT_ZONE_BEGIN(callsite, 1) };
+
+            ProfileScope { ctx }
+        }
+
+        pub fn new_with_stack(callsite: &'static SourceLocation) -> Self {
+            let ctx = unsafe { EMIT_ZONE_BEGIN_CALLSTACK(callsite, 10, 1) };
+
+            ProfileScope { ctx }
+        }
+    }
+
+    impl Drop for ProfileScope {
+        fn drop(&mut self) {
+            unsafe { EMIT_ZONE_END(self.ctx) }
+        }
+    }
+}
+
 impl SelfProfilerRef {
     pub fn new(
         profiler: Option<Arc<SelfProfiler>>,
@@ -401,6 +534,9 @@ impl SelfProfiler {
         crate_name: Option<&str>,
         event_filters: &Option<Vec<String>>,
     ) -> Result<SelfProfiler, Box<dyn Error>> {
+
+        tracy::start("/mnt/d/work/rust/tmp-polonius/profiler/tracy/library/unix/libtracy-release.so");
+
         fs::create_dir_all(output_directory)?;
 
         let crate_name = crate_name.unwrap_or("unknown-crate");

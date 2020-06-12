@@ -2127,6 +2127,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minidl"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "647da2489d438eb707e9bcffe0e47fb6f3f355ed288120740fc1e614cfadb9e9"
+
+[[package]]
 name = "minifier"
 version = "0.0.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3756,6 +3762,7 @@ dependencies = [
  "libc",
  "log",
  "measureme",
+ "minidl",
  "once_cell",
  "parking_lot 0.10.2",
  "rustc-hash",

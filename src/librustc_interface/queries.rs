@@ -111,6 +111,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn dep_graph_future(&self) -> Result<&Query<Option<DepGraphFuture>>> {
         self.dep_graph_future.compute(|| {
+            rustc_data_structures::profile_scope!("queries.dep_graph_future");
             Ok(self
                 .session()
                 .opts
@@ -121,6 +122,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn parse(&self) -> Result<&Query<ast::Crate>> {
         self.parse.compute(|| {
+            rustc_data_structures::profile_scope!("queries.parse");
             passes::parse(self.session(), &self.compiler.input).map_err(|mut parse_error| {
                 parse_error.emit();
                 ErrorReported
@@ -130,6 +132,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn register_plugins(&self) -> Result<&Query<(ast::Crate, Lrc<LintStore>)>> {
         self.register_plugins.compute(|| {
+            rustc_data_structures::profile_scope!("queries.register_plugins");
             let crate_name = self.crate_name()?.peek().clone();
             let krate = self.parse()?.take();
 
@@ -155,6 +158,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn crate_name(&self) -> Result<&Query<String>> {
         self.crate_name.compute(|| {
+            rustc_data_structures::profile_scope!("queries.crate_name");
             Ok(match self.compiler.crate_name {
                 Some(ref crate_name) => crate_name.clone(),
                 None => {
@@ -170,6 +174,7 @@ impl<'tcx> Queries<'tcx> {
         &self,
     ) -> Result<&Query<(ast::Crate, Steal<Rc<RefCell<BoxedResolver>>>, Lrc<LintStore>)>> {
         self.expansion.compute(|| {
+            rustc_data_structures::profile_scope!("queries.expansion");
             let crate_name = self.crate_name()?.peek().clone();
             let (krate, lint_store) = self.register_plugins()?.take();
             let _timer = self.session().timer("configure_and_expand");
@@ -188,6 +193,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn dep_graph(&self) -> Result<&Query<DepGraph>> {
         self.dep_graph.compute(|| {
+            rustc_data_structures::profile_scope!("queries.dep_graph");
             Ok(match self.dep_graph_future()?.take() {
                 None => DepGraph::new_disabled(),
                 Some(future) => {
@@ -208,6 +214,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn lower_to_hir(&'tcx self) -> Result<&Query<(&'tcx Crate<'tcx>, Steal<ResolverOutputs>)>> {
         self.lower_to_hir.compute(|| {
+            rustc_data_structures::profile_scope!("queries.lower_to_hir");
             let expansion_result = self.expansion()?;
             let peeked = expansion_result.peek();
             let krate = &peeked.0;
@@ -230,6 +237,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn prepare_outputs(&self) -> Result<&Query<OutputFilenames>> {
         self.prepare_outputs.compute(|| {
+            rustc_data_structures::profile_scope!("queries.prepare_outputs");
             let expansion_result = self.expansion()?;
             let (krate, boxed_resolver, _) = &*expansion_result.peek();
             let crate_name = self.crate_name()?;
@@ -246,6 +254,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn global_ctxt(&'tcx self) -> Result<&Query<QueryContext<'tcx>>> {
         self.global_ctxt.compute(|| {
+            rustc_data_structures::profile_scope!("queries.global_ctx");
             let crate_name = self.crate_name()?.peek().clone();
             let outputs = self.prepare_outputs()?.peek().clone();
             let lint_store = self.expansion()?.peek().2.clone();
@@ -269,6 +278,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn ongoing_codegen(&'tcx self) -> Result<&Query<Box<dyn Any>>> {
         self.ongoing_codegen.compute(|| {
+            rustc_data_structures::profile_scope!("queries.ongoing_codegen");
             let outputs = self.prepare_outputs()?;
             self.global_ctxt()?.peek_mut().enter(|tcx| {
                 tcx.analysis(LOCAL_CRATE).ok();

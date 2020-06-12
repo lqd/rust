@@ -126,12 +126,14 @@ where
     I: Iterator<Item = MonoItem<'tcx>>,
 {
     let _prof_timer = tcx.prof.generic_activity("cgu_partitioning");
+    rustc_data_structures::profile_scope!("cgu_partitioning");
 
     // In the first step, we place all regular monomorphizations into their
     // respective 'home' codegen unit. Regular monomorphizations are all
     // functions and statics defined in the local crate.
     let mut initial_partitioning = {
         let _prof_timer = tcx.prof.generic_activity("cgu_partitioning_place_roots");
+        rustc_data_structures::profile_scope!("cgu_partitioning_place_roots");
         place_root_mono_items(tcx, mono_items)
     };
 
@@ -142,6 +144,7 @@ where
     // Merge until we have at most `max_cgu_count` codegen units.
     {
         let _prof_timer = tcx.prof.generic_activity("cgu_partitioning_merge_cgus");
+        rustc_data_structures::profile_scope!("cgu_partitioning_merge_cgus");
         merge_codegen_units(tcx, &mut initial_partitioning, max_cgu_count);
         debug_dump(tcx, "POST MERGING:", initial_partitioning.codegen_units.iter());
     }
@@ -152,6 +155,7 @@ where
     // local functions the definition of which is marked with `#[inline]`.
     let mut post_inlining = {
         let _prof_timer = tcx.prof.generic_activity("cgu_partitioning_place_inline_items");
+        rustc_data_structures::profile_scope!("cgu_partitioning_place_inline_items");
         place_inlined_mono_items(initial_partitioning, inlining_map)
     };
 
@@ -163,6 +167,7 @@ where
     // more freedom to optimize.
     if !tcx.sess.opts.cg.link_dead_code {
         let _prof_timer = tcx.prof.generic_activity("cgu_partitioning_internalize_symbols");
+        rustc_data_structures::profile_scope!("cgu_partitioning_internalize_symbols");
         internalize_symbols(tcx, &mut post_inlining, inlining_map);
     }
 
@@ -850,6 +855,7 @@ where
     'tcx: 'a,
 {
     let _prof_timer = tcx.prof.generic_activity("assert_symbols_are_distinct");
+    rustc_data_structures::profile_scope!("assert_symbols_are_distinct");
 
     let mut symbols: Vec<_> =
         mono_items.map(|mono_item| (mono_item, mono_item.symbol_name(tcx))).collect();
@@ -925,6 +931,7 @@ fn collect_and_partition_mono_items(
     tcx.sess.abort_if_errors();
 
     let (codegen_units, _) = tcx.sess.time("partition_and_assert_distinct_symbols", || {
+        rustc_data_structures::profile_scope!("partition_and_assert_distinct_symbols");
         sync::join(
             || {
                 &*tcx.arena.alloc_from_iter(partition(

@@ -1407,6 +1407,7 @@ impl<'a> Resolver<'a> {
     /// Entry point to crate resolution.
     pub fn resolve_crate(&mut self, krate: &Crate) {
         let _prof_timer = self.session.prof.generic_activity("resolve_crate");
+        rustc_data_structures::profile_scope!("resolve_crate");
 
         ImportResolver { r: self }.finalize_imports();
         self.finalize_macro_resolutions();

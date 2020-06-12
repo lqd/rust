@@ -348,6 +348,7 @@ pub fn run_compiler(
 
             // Drop AST after creating GlobalCtxt to free memory
             let _timer = sess.prof.generic_activity("drop_ast");
+            rustc_data_structures::profile_scope!("drop_ast");
             mem::drop(queries.expansion()?.take());
 
             if sess.opts.debugging_opts.no_analysis || sess.opts.debugging_opts.ast_json {
@@ -360,6 +361,7 @@ pub fn run_compiler(
                     let result = tcx.analysis(LOCAL_CRATE);
 
                     sess.time("save_analysis", || {
+                        rustc_data_structures::profile_scope!("save_analysis");
                         save::process_crate(
                             tcx,
                             &crate_name,

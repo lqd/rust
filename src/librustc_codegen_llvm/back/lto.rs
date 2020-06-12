@@ -64,6 +64,7 @@ fn prepare_lto(
     let exported_symbols = cgcx.exported_symbols.as_ref().expect("needs exported symbols for LTO");
     let mut symbol_white_list = {
         let _timer = cgcx.prof.generic_activity("LLVM_lto_generate_symbol_white_list");
+        rustc_data_structures::profile_scope!("LLVM_lto_generate_symbol_white_list");
         exported_symbols[&LOCAL_CRATE].iter().filter_map(symbol_filter).collect::<Vec<CString>>()
     };
     info!("{} symbols to preserve in this crate", symbol_white_list.len());
@@ -103,6 +104,7 @@ fn prepare_lto(
                 cgcx.exported_symbols.as_ref().expect("needs exported symbols for LTO");
             {
                 let _timer = cgcx.prof.generic_activity("LLVM_lto_generate_symbol_white_list");
+                rustc_data_structures::profile_scope!("LLVM_lto_generate_symbol_white_list");
                 symbol_white_list.extend(exported_symbols[&cnum].iter().filter_map(symbol_filter));
             }
 
@@ -195,6 +197,7 @@ fn fat_lto(
     symbol_white_list: &[*const libc::c_char],
 ) -> Result<LtoModuleCodegen<LlvmCodegenBackend>, FatalError> {
     let _timer = cgcx.prof.generic_activity("LLVM_fat_lto_build_monolithic_module");
+    rustc_data_structures::profile_scope!("LLVM_fat_lto_build_monolithic_module");
     info!("going for a fat lto");
 
     // Sort out all our lists of incoming modules into two lists.
@@ -398,6 +401,7 @@ fn thin_lto(
     symbol_white_list: &[*const libc::c_char],
 ) -> Result<(Vec<LtoModuleCodegen<LlvmCodegenBackend>>, Vec<WorkProduct>), FatalError> {
     let _timer = cgcx.prof.generic_activity("LLVM_thin_lto_global_analysis");
+    rustc_data_structures::profile_scope!("LLVM_thin_lto_global_analysis");
     unsafe {
         info!("going for that thin, thin LTO");
 
@@ -833,6 +837,7 @@ pub unsafe fn optimize_thin_module(
         {
             let _timer =
                 cgcx.prof.generic_activity_with_arg("LLVM_thin_lto_rename", thin_module.name());
+            rustc_data_structures::profile_scope!("LLVM_thin_lto_rename");
             if !llvm::LLVMRustPrepareThinLTORename(thin_module.shared.data.0, llmod) {
                 let msg = "failed to prepare thin LTO module";
                 return Err(write::llvm_err(&diag_handler, msg));
@@ -865,6 +870,7 @@ pub unsafe fn optimize_thin_module(
         {
             let _timer =
                 cgcx.prof.generic_activity_with_arg("LLVM_thin_lto_import", thin_module.name());
+            rustc_data_structures::profile_scope!("LLVM_thin_lto_import");
             if !llvm::LLVMRustPrepareThinLTOImport(thin_module.shared.data.0, llmod) {
                 let msg = "failed to prepare thin LTO module";
                 return Err(write::llvm_err(&diag_handler, msg));

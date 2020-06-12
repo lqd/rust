@@ -583,6 +583,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
             cgu_name_builder.build_cgu_name(LOCAL_CRATE, &["crate"], Some("metadata")).to_string();
         let mut metadata_llvm_module = backend.new_metadata(tcx, &metadata_cgu_name);
         tcx.sess.time("write_compressed_metadata", || {
+            rustc_data_structures::profile_scope!("write_compressed_metadata");
             backend.write_compressed_metadata(
                 tcx,
                 &ongoing_codegen.metadata,
@@ -621,6 +622,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     let pre_compile_cgus = |cgu_reuse: &[CguReuse]| {
         if cfg!(parallel_compiler) {
             tcx.sess.time("compile_first_CGU_batch", || {
+                rustc_data_structures::profile_scope!("compile_first_CGU_batch");
                 // Try to find one CGU to compile per thread.
                 let cgus: Vec<_> = cgu_reuse
                     .iter()
@@ -656,6 +658,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         if pre_compiled_cgus.is_none() {
             // Calculate the CGU reuse
             cgu_reuse = tcx.sess.time("find_cgu_reuse", || {
+                rustc_data_structures::profile_scope!("find_cgu_reuse");
                 codegen_units.iter().map(|cgu| determine_cgu_reuse(tcx, &cgu)).collect()
             });
             // Pre compile some CGUs
@@ -780,13 +783,14 @@ impl<B: ExtraBackendMethods> Drop for AbortCodegenOnDrop<B> {
 }
 
 fn finalize_tcx(tcx: TyCtxt<'_>) {
-    tcx.sess.time("assert_dep_graph", || ::rustc_incremental::assert_dep_graph(tcx));
-    tcx.sess.time("serialize_dep_graph", || ::rustc_incremental::save_dep_graph(tcx));
+    tcx.sess.time("assert_dep_graph", || { rustc_data_structures::profile_scope!("assert_dep_graph"); ::rustc_incremental::assert_dep_graph(tcx) });
+    tcx.sess.time("serialize_dep_graph", || { rustc_data_structures::profile_scope!("serialize_dep_graph"); ::rustc_incremental::save_dep_graph(tcx) });
 
     // We assume that no queries are run past here. If there are new queries
     // after this point, they'll show up as "<unknown>" in self-profiling data.
     {
         let _prof_timer = tcx.prof.generic_activity("self_profile_alloc_query_strings");
+        rustc_data_structures::profile_scope!("self_profile_alloc_qquery_strings");
         tcx.alloc_self_profile_query_strings();
     }
 }

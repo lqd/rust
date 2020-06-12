@@ -65,6 +65,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
         }
 
         sess.time("link_binary_check_files_are_writeable", || {
+            rustc_data_structures::profile_scope!("link_binary_check_files_are_writeable");
             for obj in codegen_results.modules.iter().filter_map(|m| m.object.as_ref()) {
                 check_file_is_writeable(obj, sess);
             }
@@ -115,6 +116,7 @@ pub fn link_binary<'a, B: ArchiveBuilder<'a>>(
 
     // Remove the temporary object file and metadata if we aren't saving temps
     sess.time("link_binary_remove_temps", || {
+        rustc_data_structures::profile_scope!("link_binary_remove_temps");
         if !sess.opts.cg.save_temps {
             if sess.opts.output_types.should_codegen()
                 && !preserve_objects_for_their_debuginfo(sess)
@@ -501,7 +503,7 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
     let mut i = 0;
     loop {
         i += 1;
-        prog = sess.time("run_linker", || exec_linker(sess, &cmd, out_filename, tmpdir));
+        prog = sess.time("run_linker", || { rustc_data_structures::profile_scope!("run_linker"); exec_linker(sess, &cmd, out_filename, tmpdir) });
         let output = match prog {
             Ok(ref output) => output,
             Err(_) => break,
@@ -1928,6 +1930,8 @@ fn add_upstream_rust_crates<'a, B: ArchiveBuilder<'a>>(
         let name = &name[3..name.len() - 5]; // chop off lib/.rlib
 
         sess.prof.generic_activity_with_arg("link_altering_rlib", name).run(|| {
+            rustc_data_structures::profile_scope!("link_altering_rlib");
+
             let mut archive = <B as ArchiveBuilder>::new(sess, &dst, Some(cratepath));
             archive.update_symbols();
 

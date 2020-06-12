@@ -345,6 +345,7 @@ fn generate_lto_work<B: ExtraBackendMethods>(
     import_only_modules: Vec<(SerializedModule<B::ModuleBuffer>, WorkProduct)>,
 ) -> Vec<(WorkItem<B>, u64)> {
     let _prof_timer = cgcx.prof.generic_activity("codegen_generate_lto_work");
+    rustc_data_structures::profile_scope!("codegen_generate_lto_work");
 
     let (lto_modules, copy_jobs) = if !needs_fat_lto.is_empty() {
         assert!(needs_thin_lto.is_empty());
@@ -1691,7 +1692,7 @@ impl<B: ExtraBackendMethods> OngoingCodegen<B> {
 
         self.shared_emitter_main.check(sess, true);
         let future = self.future;
-        let compiled_modules = sess.time("join_worker_thread", || match future.join() {
+        let compiled_modules = sess.time("join_worker_thread", || { rustc_data_structures::profile_scope!("join_worker_thread"); match future.join() {
             Ok(Ok(compiled_modules)) => compiled_modules,
             Ok(Err(())) => {
                 sess.abort_if_errors();
@@ -1700,7 +1701,7 @@ impl<B: ExtraBackendMethods> OngoingCodegen<B> {
             Err(_) => {
                 bug!("panic during codegen/LLVM phase");
             }
-        });
+        }});
 
         sess.cgu_reuse_tracker.check_expected_reuse(sess.diagnostic());
 

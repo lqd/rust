@@ -56,6 +56,23 @@ macro_rules! unlikely {
     };
 }
 
+/// Define a profiling scope.
+#[macro_export]
+macro_rules! profile_scope {
+    ($string:expr) => {
+        const CALLSITE: rustc_data_structures::profiling::tracy::SourceLocation = rustc_data_structures::profiling::tracy::SourceLocation {
+            name: concat!($string, "\0").as_ptr(),
+            function: concat!(module_path!(), "\0").as_ptr(),
+            file: concat!(file!(), "\0").as_ptr(),
+            // file: concat!(env!("CARGO_MANIFEST_DIR"), "/", file!(), "\0").as_ptr(),
+            line: line!(),
+            color: 0xff0000ff,
+        };
+
+        let _profile_scope = rustc_data_structures::profiling::tracy::ProfileScope::new_with_stack(&CALLSITE);
+    };
+}
+
 pub mod base_n;
 pub mod binary_search_util;
 pub mod box_region;

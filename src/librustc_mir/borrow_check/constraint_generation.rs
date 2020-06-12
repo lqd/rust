@@ -86,6 +86,7 @@ impl<'cg, 'cx, 'tcx> Visitor<'tcx> for ConstraintGeneration<'cg, 'cx, 'tcx> {
     fn visit_statement(&mut self, statement: &Statement<'tcx>, location: Location) {
         if let Some(all_facts) = self.all_facts {
             let _prof_timer = self.infcx.tcx.prof.generic_activity("polonius_fact_generation");
+            rustc_data_structures::profile_scope!("polonius_fact_generation");
             all_facts.cfg_edge.push((
                 self.location_table.start_index(location),
                 self.location_table.mid_index(location),
@@ -122,6 +123,7 @@ impl<'cg, 'cx, 'tcx> Visitor<'tcx> for ConstraintGeneration<'cg, 'cx, 'tcx> {
     fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
         if let Some(all_facts) = self.all_facts {
             let _prof_timer = self.infcx.tcx.prof.generic_activity("polonius_fact_generation");
+            rustc_data_structures::profile_scope!("polonius_fact_generation");
             all_facts.cfg_edge.push((
                 self.location_table.start_index(location),
                 self.location_table.mid_index(location),
@@ -180,6 +182,7 @@ impl<'cx, 'cg, 'tcx> ConstraintGeneration<'cx, 'cg, 'tcx> {
     fn record_killed_borrows_for_place(&mut self, place: Place<'tcx>, location: Location) {
         if let Some(all_facts) = self.all_facts {
             let _prof_timer = self.infcx.tcx.prof.generic_activity("polonius_fact_generation");
+            rustc_data_structures::profile_scope!("polonius_fact_generation");
 
             // Depending on the `Place` we're killing:
             // - if it's a local, or a single deref of a local,
