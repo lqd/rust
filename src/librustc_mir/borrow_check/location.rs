@@ -13,7 +13,6 @@ use rustc_middle::mir::{BasicBlock, Body, Location};
 /// table serves another purpose: it compresses locations from
 /// multiple words into a single u32.
 crate struct LocationTable {
-    num_points: usize,
     statements_before_block: IndexVec<BasicBlock, usize>,
 }
 
@@ -43,13 +42,8 @@ impl LocationTable {
             .collect();
 
         debug!("LocationTable(statements_before_block={:#?})", statements_before_block);
-        debug!("LocationTable: num_points={:#?}", num_points);
 
-        Self { num_points, statements_before_block }
-    }
-
-    crate fn all_points(&self) -> impl Iterator<Item = LocationIndex> {
-        (0..self.num_points).map(LocationIndex::new)
+        Self { statements_before_block }
     }
 
     crate fn start_index(&self, location: Location) -> LocationIndex {

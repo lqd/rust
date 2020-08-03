@@ -82,6 +82,7 @@ impl AllFactsExt for AllFacts {
                 path_moved_at_base,
                 path_accessed_at_base,
                 known_subset,
+                outlives_everywhere,
             ])
         }
         Ok(())

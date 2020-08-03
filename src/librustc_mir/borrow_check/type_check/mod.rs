@@ -1,9 +1,7 @@
 //! This pass type-checks the MIR to ensure it is not broken.
 
 use std::rc::Rc;
-use std::{fmt, iter, mem};
-
-use either::Either;
+use std::{fmt, mem};
 
 use rustc_data_structures::frozen::Frozen;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -231,23 +229,18 @@ fn translate_outlives_facts(typeck: &mut TypeChecker<'_, '_>) {
     if let Some(facts) = cx.all_facts {
         let _prof_timer = typeck.infcx.tcx.prof.generic_activity("polonius_fact_generation");
         let location_table = cx.location_table;
-        facts.outlives.extend(cx.constraints.outlives_constraints.outlives().iter().flat_map(
-            |constraint: &OutlivesConstraint| {
-                if let Some(from_location) = constraint.locations.from_location() {
-                    Either::Left(iter::once((
-                        constraint.sup,
-                        constraint.sub,
-                        location_table.mid_index(from_location),
-                    )))
-                } else {
-                    Either::Right(
-                        location_table
-                            .all_points()
-                            .map(move |location| (constraint.sup, constraint.sub, location)),
-                    )
-                }
-            },
-        ));
+
+        for constraint in cx.constraints.outlives_constraints.outlives().iter() {
+            if let Some(from_location) = constraint.locations.from_location() {
+                facts.outlives.push((
+                    constraint.sup,
+                    constraint.sub,
+                    location_table.mid_index(from_location),
+                ));
+            } else {
+                facts.outlives_everywhere.push((constraint.sup, constraint.sub));
+            }
+        }
     }
 }
 
