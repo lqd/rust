@@ -98,5 +98,7 @@ rustc-std-workspace-std = { path = 'library/rustc-std-workspace-std' }
 # source code for this crate.
 backtrace = { path = "library/backtrace" }
 
+polonius-engine = { git = "https://github.com/lqd/borrow-check", branch = "variant_prototype3" }
+
 [patch."https://github.com/rust-lang/rust-clippy"]
 clippy_lints = { path = "src/tools/clippy/clippy_lints" }
