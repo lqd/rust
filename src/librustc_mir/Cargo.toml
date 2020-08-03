@@ -15,7 +15,7 @@ rustc_graphviz = { path = "../librustc_graphviz" }
 itertools = "0.8"
 log = { package = "tracing", version = "0.1" }
 log_settings = "0.1.1"
-polonius-engine = "0.12.0"
+polonius-engine = { path = "/mnt/d/work/rust/tmp-polonius/lqd-polonius6/polonius-engine" }
 rustc_middle = { path = "../librustc_middle" }
 rustc_attr = { path = "../librustc_attr" }
 rustc_data_structures = { path = "../librustc_data_structures" }
