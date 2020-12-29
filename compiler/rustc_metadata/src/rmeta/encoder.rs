@@ -1519,8 +1519,20 @@ impl EncodeContext<'a, 'tcx> {
             record!(self.tables.fn_sig[def_id] <- substs.as_closure().sig());
         }
         self.encode_generics(def_id.to_def_id());
-        self.encode_optimized_mir(def_id);
-        self.encode_promoted_mir(def_id);
+
+        let mir = {
+            let generics = self.tcx.generics_of(def_id);
+            let needs_inline = (generics.requires_monomorphization(self.tcx)
+                || self.tcx.codegen_fn_attrs(def_id).requests_inline())
+                && !self.metadata_output_only();
+            let is_generator = ty.is_generator();
+            let always_encode_mir = self.tcx.sess.opts.debugging_opts.always_encode_mir;
+            needs_inline || is_generator || always_encode_mir
+        };
+        if mir {
+            self.encode_optimized_mir(def_id);
+            self.encode_promoted_mir(def_id);
+        }
     }
 
     fn encode_info_for_anon_const(&mut self, def_id: LocalDefId) {
