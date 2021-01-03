@@ -617,8 +617,11 @@ impl<'hir> Sig for hir::Generics<'hir> {
             if let hir::GenericParamKind::Const { ref ty, ref default } = param.kind {
                 param_text.push_str(": ");
                 param_text.push_str(&ty_to_string(&ty));
-                if let Some(ref _default) = default {
-                    // FIXME(const_generics_defaults): push the `default` value here
+                if let Some(ref default) = default {
+                    param_text.push_str(" = ");
+                    param_text.push_str(
+                        &id_to_string(&scx.tcx.hir(), default.body.hir_id).replace('\n', " "),
+                    );
                 }
             }
             if !param.bounds.is_empty() {
