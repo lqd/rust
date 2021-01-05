@@ -723,25 +723,46 @@ fn validate_generic_param_order(
     generics: &[GenericParam],
     span: Span,
 ) {
+    // FIXME: all the work this function does is wasted if the parameter list is already in the correct order
+
     let mut max_param: Option<ParamKindOrd> = None;
     let mut out_of_order = FxHashMap::default();
     let mut param_idents = vec![];
 
+    // We track whether the parameter list contains a defaulted type or const parameter, so that we
+    // can avoid mentioning defaults in the suggestions when there's no need to: the vast majority
+    // will not have defaults, avoiding their subtleties and constraints will make the suggestions
+    // simpler (and they have not been historically mentioned much in diagnostics).
+    let mut parameters_contain_default = false;
     for param in generics {
-        let ident = Some(param.ident.to_string());
+        let ident = param.ident.to_string();
         let (kind, bounds, span) = (&param.kind, Some(&*param.bounds), param.ident.span);
         let (ord_kind, ident) = match &param.kind {
             GenericParamKind::Lifetime => (ParamKindOrd::Lifetime, ident),
-            GenericParamKind::Type { default: _ } => (ParamKindOrd::Type, ident),
-            GenericParamKind::Const { ref ty, kw_span: _, default: _ } => {
+            GenericParamKind::Type { default } => {
+                let has_default = default.is_some();
+                if has_default {
+                    parameters_contain_default = true;
+                }
+                (ParamKindOrd::Type { has_default }, ident)
+            }
+            GenericParamKind::Const { ref ty, kw_span: _, default } => {
+                let has_default = default.is_some();
+                if has_default {
+                    parameters_contain_default = true;
+                }
                 let ty = pprust::ty_to_string(ty);
                 let unordered = sess.features_untracked().const_generics;
-                (ParamKindOrd::Const { unordered }, Some(format!("const {}: {}", param.ident, ty)))
+                (ParamKindOrd::Const { unordered }, format!("const {}: {}", param.ident, ty))
             }
         };
-        if let Some(ident) = ident {
-            param_idents.push((kind, ord_kind, bounds, param_idents.len(), ident));
-        }
+
+        param_idents.push((kind, ord_kind, bounds, param_idents.len(), ident));
+
+        // FIXME: This currently creates suggestions like "$early_kind should be before $max_kind"
+        // which is technically correct but imprecise: the parameter should be placed immediately
+        // before its successor in the `ParamKindOrd` order, and should probably be using the least
+        // upper bound present, per ord_kind, rather than the max in the list.
         let max_param = &mut max_param;
         match max_param {
             Some(max_param) if *max_param > ord_kind => {
@@ -768,12 +789,12 @@ fn validate_generic_param_order(
                 }
             }
             match kind {
+                GenericParamKind::Lifetime => (),
                 GenericParamKind::Type { default: Some(default) } => {
                     ordered_params += " = ";
                     ordered_params += &pprust::ty_to_string(default);
                 }
                 GenericParamKind::Type { default: None } => (),
-                GenericParamKind::Lifetime => (),
                 // FIXME(const_generics_defaults)
                 GenericParamKind::Const { ty: _, kw_span: _, default: _ } => (),
             }
@@ -783,6 +804,12 @@ fn validate_generic_param_order(
     ordered_params += ">";
 
     for (param_ord, (max_param, spans)) in &out_of_order {
+        // `max_param` could be one of the parameter kinds forced to be trailing, because of a
+        // default value. Make sure the error message fits when that's the case.
+        let max_param = match max_param {
+            ParamKindOrd::Type { has_default: true } => "defaulted".to_string(),
+            _ => max_param.to_string(),
+        };
         let mut err =
             handler.struct_span_err(
                 spans.clone(),
@@ -791,16 +818,23 @@ fn validate_generic_param_order(
                     param_ord, max_param,
                 ),
             );
+        let mut note = format!(
+            "the expected order for parameters is: lifetimes, {}",
+            if sess.features_untracked().const_generics {
+                "then consts and types"
+            } else {
+                "then types, then consts"
+            }
+        );
+        // As described above, to keep the expected order simple in most reordering suggestions, we
+        // only mention default parameters if there are any in the parameter list.
+        if parameters_contain_default {
+            note.push_str(", then defaulted parameters");
+        }
+        err.note(&note);
         err.span_suggestion(
             span,
-            &format!(
-                "reorder the parameters: lifetimes, {}",
-                if sess.features_untracked().const_generics {
-                    "then consts and types"
-                } else {
-                    "then types, then consts"
-                }
-            ),
+            "reorder the parameters",
             ordered_params.clone(),
             Applicability::MachineApplicable,
         );
@@ -1142,32 +1176,52 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
     }
 
     fn visit_generics(&mut self, generics: &'a Generics) {
-        let mut prev_ty_default = None;
+        // Check whether the generics have incompatibilities: type parameters with default values,
+        // used together with const parameters, under `min_const_generics`
+        let mut has_ty_default = false;
+        let mut has_const = false;
         for param in &generics.params {
             match param.kind {
-                GenericParamKind::Lifetime => (),
-                GenericParamKind::Type { default: Some(_), .. } => {
-                    prev_ty_default = Some(param.ident.span);
-                }
-                GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
-                    if let Some(span) = prev_ty_default {
+                GenericParamKind::Type { default: Some(ref default), .. } => {
+                    has_ty_default = true;
+
+                    let span = param.ident.span.to(default.span);
+
+                    // Check for a `min_const_generics` incompatibility
+                    if has_const && !self.session.features_untracked().const_generics {
                         let mut err = self.err_handler().struct_span_err(
                             span,
-                            "type parameters with a default must be trailing",
-                        );
-                        if matches!(param.kind, GenericParamKind::Const { .. }) {
-                            err.note(
-                                "using type defaults and const parameters \
+                            "using type defaults and const parameters \
                                  in the same parameter list is currently not permitted",
-                            );
-                        }
+                        );
                         err.emit();
-                        break;
                     }
                 }
+                GenericParamKind::Const { ref default, .. } => {
+                    has_const = true;
+
+                    let span = if let Some(default) = default {
+                        param.ident.span.to(default.value.span)
+                    } else {
+                        param.ident.span
+                    };
+
+                    // Check for a `min_const_generics` incompatibility
+                    if has_ty_default && !self.session.features_untracked().const_generics {
+                        let mut err = self.err_handler().struct_span_err(
+                            span,
+                            "using type defaults and const parameters \
+                                 in the same parameter list is currently not permitted",
+                        );
+                        err.emit();
+                    }
+                }
+                _ => (),
             }
         }
 
+        // Check the specific order of the parameter list, which also depends on whether
+        // `const_generics` are enabled.
         validate_generic_param_order(
             self.session,
             self.err_handler(),

@@ -38,7 +38,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let unordered = sess.features_untracked().const_generics;
         let kind_ord = match kind {
             "lifetime" => ParamKindOrd::Lifetime,
-            "type" => ParamKindOrd::Type,
+            "type" => ParamKindOrd::Type { has_default: false },
             "constant" => ParamKindOrd::Const { unordered },
             // It's more concise to match on the string representation, though it means
             // the match is non-exhaustive.
@@ -53,7 +53,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         let arg_ord = match arg {
             GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
-            GenericArg::Type(_) => ParamKindOrd::Type,
+            GenericArg::Type(_) => ParamKindOrd::Type { has_default: false },
             GenericArg::Const(_) => ParamKindOrd::Const { unordered },
         };
 
@@ -233,9 +233,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                                     GenericParamDefKind::Lifetime => {
                                                         ParamKindOrd::Lifetime
                                                     }
-                                                    GenericParamDefKind::Type { .. } => {
-                                                        ParamKindOrd::Type
-                                                    }
+                                                    GenericParamDefKind::Type {
+                                                        has_default,
+                                                        ..
+                                                    } => ParamKindOrd::Type { has_default },
                                                     GenericParamDefKind::Const => {
                                                         ParamKindOrd::Const {
                                                             unordered: tcx
@@ -261,7 +262,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                         kind.descr(),
                                         !args_iter.clone().is_sorted_by_key(|arg| match arg {
                                             GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
-                                            GenericArg::Type(_) => ParamKindOrd::Type,
+                                            GenericArg::Type(_) => {
+                                                ParamKindOrd::Type { has_default: false }
+                                            }
                                             GenericArg::Const(_) => ParamKindOrd::Const {
                                                 unordered: tcx.features().const_generics,
                                             },

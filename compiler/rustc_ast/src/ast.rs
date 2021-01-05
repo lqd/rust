@@ -313,11 +313,17 @@ pub type GenericBounds = Vec<GenericBound>;
 #[derive(Hash, Clone, Copy)]
 pub enum ParamKindOrd {
     Lifetime,
-    Type,
+    /// Generic type parameters can have a default value, e.g. `<T = u32>`. All defaulted generic
+    /// parameters have to be located at the end of the parameter list.
+    Type {
+        has_default: bool,
+    },
     // `unordered` is only `true` if `sess.has_features().const_generics`
     // is active. Specifically, if it's only `min_const_generics`, it will still require
     // ordering consts after types.
-    Const { unordered: bool },
+    Const {
+        unordered: bool,
+    },
 }
 
 impl Ord for ParamKindOrd {
@@ -325,11 +331,12 @@ impl Ord for ParamKindOrd {
         use ParamKindOrd::*;
         let to_int = |v| match v {
             Lifetime => 0,
-            Type | Const { unordered: true } => 1,
+            Type { has_default: false } | Const { unordered: true } => 1,
             // technically both consts should be ordered equally,
             // but only one is ever encountered at a time, so this is
             // fine.
             Const { unordered: false } => 2,
+            Type { has_default: true } => 3,
         };
 
         to_int(*self).cmp(&to_int(*other))
@@ -351,7 +358,7 @@ impl fmt::Display for ParamKindOrd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParamKindOrd::Lifetime => "lifetime".fmt(f),
-            ParamKindOrd::Type => "type".fmt(f),
+            ParamKindOrd::Type { .. } => "type".fmt(f),
             ParamKindOrd::Const { .. } => "const".fmt(f),
         }
     }
