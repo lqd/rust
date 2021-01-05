@@ -377,7 +377,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         infer_args: bool,
     ) -> GenericArgCountResult {
         // At this stage we are guaranteed that the generic arguments are in the correct order, e.g.
-        // that lifetimes will proceed types. So it suffices to check the number of each generic
+        // that lifetimes will precede types. So it suffices to check the number of each generic
         // arguments in order to validate them with respect to the generic parameters.
         let param_counts = def.own_counts();
         let named_type_param_count = param_counts.types - has_self as usize;
@@ -391,8 +391,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 GenericParamDefKind::Type { has_default, .. } => {
                     defaults.types += has_default as usize
                 }
-                GenericParamDefKind::Const { .. } => {
-                    // FIXME(const_generics_defaults)
+                GenericParamDefKind::Const { has_default } => {
+                    defaults.consts += has_default as usize
                 }
             };
         }
