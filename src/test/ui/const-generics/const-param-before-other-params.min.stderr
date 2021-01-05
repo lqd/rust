@@ -2,13 +2,17 @@ error: lifetime parameters must be declared prior to const parameters
   --> $DIR/const-param-before-other-params.rs:5:21
    |
 LL | fn bar<const X: (), 'a>(_: &'a ()) {
-   |       --------------^^- help: reorder the parameters: lifetimes, then types, then consts: `<'a, const X: ()>`
+   |       --------------^^- help: reorder the parameters: `<'a, const X: ()>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts
 
 error: type parameters must be declared prior to const parameters
   --> $DIR/const-param-before-other-params.rs:10:21
    |
 LL | fn foo<const X: (), T>(_: &T) {}
-   |       --------------^- help: reorder the parameters: lifetimes, then types, then consts: `<T, const X: ()>`
+   |       --------------^- help: reorder the parameters: `<T, const X: ()>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts
 
 error: `()` is forbidden as the type of a const generic parameter
   --> $DIR/const-param-before-other-params.rs:5:17

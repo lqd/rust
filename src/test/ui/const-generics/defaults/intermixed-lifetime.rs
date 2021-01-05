@@ -5,11 +5,11 @@
 
 struct Foo<const N: usize, 'a, T = u32>(&'a (), T);
 //~^ Error lifetime parameters must be declared prior to const parameters
-//[min]~^^ Error type parameters must be declared prior to const parameters
+//[min]~^^ Error using type defaults and const parameters in the same parameter list
 
 struct Bar<const N: usize, T = u32, 'a>(&'a (), T);
-//[full]~^ Error lifetime parameters must be declared prior to type parameters
-//[min]~^^ Error type parameters must be declared prior to const parameters
-//[min]~| Error lifetime parameters must be declared prior to const parameters
+//[full]~^ Error lifetime parameters must be declared prior to defaulted parameters
+//[min]~^^ Error using type defaults and const parameters in the same parameter list
+//[min]~| Error lifetime parameters must be declared prior to defaulted parameters
 
 fn main() {}

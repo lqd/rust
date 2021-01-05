@@ -2,13 +2,17 @@ error: lifetime parameters must be declared prior to const parameters
   --> $DIR/intermixed-lifetime.rs:6:28
    |
 LL | struct Foo<const N: usize, 'a, T = u32>(&'a (), T);
-   |           -----------------^^---------- help: reorder the parameters: lifetimes, then consts and types: `<'a, const N: usize, T = u32>`
+   |           -----------------^^---------- help: reorder the parameters: `<'a, const N: usize, T = u32>`
+   |
+   = note: the expected order for parameters is: lifetimes, then consts and types, then defaulted parameters
 
-error: lifetime parameters must be declared prior to type parameters
+error: lifetime parameters must be declared prior to defaulted parameters
   --> $DIR/intermixed-lifetime.rs:10:37
    |
 LL | struct Bar<const N: usize, T = u32, 'a>(&'a (), T);
-   |           --------------------------^^- help: reorder the parameters: lifetimes, then consts and types: `<'a, const N: usize, T = u32>`
+   |           --------------------------^^- help: reorder the parameters: `<'a, const N: usize, T = u32>`
+   |
+   = note: the expected order for parameters is: lifetimes, then consts and types, then defaulted parameters
 
 error: aborting due to 2 previous errors
 

@@ -1,10 +1,16 @@
-error: type parameters with a default must be trailing
-  --> $DIR/wrong-order.rs:4:10
+error: using type defaults and const parameters in the same parameter list is currently not permitted
+  --> $DIR/wrong-order.rs:4:25
    |
 LL | struct A<T = u32, const N: usize> {
-   |          ^
-   |
-   = note: using type defaults and const parameters in the same parameter list is currently not permitted
+   |                         ^
 
-error: aborting due to previous error
+error: const parameters must be declared prior to defaulted parameters
+  --> $DIR/wrong-order.rs:4:25
+   |
+LL | struct A<T = u32, const N: usize> {
+   |         ----------------^-------- help: reorder the parameters: `<const N: usize, T = u32>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts, then defaulted parameters
+
+error: aborting due to 2 previous errors
 

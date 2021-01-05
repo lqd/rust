@@ -6,9 +6,9 @@
 #![cfg_attr(full, feature(const_generics))]
 #![cfg_attr(full, allow(incomplete_features))]
 
-struct A<const N: usize, T=u32>(T);
-//[min]~^ ERROR type parameters must be declared prior
+struct A<const N: usize, T = u32>(T);
+//[min]~^ ERROR using type defaults and const parameters in the same parameter list
 
 fn main() {
-  let _: A<3> = A(0);
+    let _: A<3> = A(0);
 }

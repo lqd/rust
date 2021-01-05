@@ -10,6 +10,7 @@ struct Foo<T, U = [u8; std::mem::size_of::<T>()]>(T, U);
 // FIXME(const_generics_defaults): We still don't know how to deal with type defaults.
 struct Bar<T = [u8; N], const N: usize>(T);
 //~^ ERROR constant values inside of type parameter defaults
-//~| ERROR type parameters with a default
+//~| ERROR const parameters must be declared prior to defaulted parameters
+//[min]~| ERROR using type defaults and const parameters in the same parameter list
 
 fn main() {}

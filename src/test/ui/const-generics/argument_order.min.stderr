@@ -2,19 +2,25 @@ error: type parameters must be declared prior to const parameters
   --> $DIR/argument_order.rs:5:28
    |
 LL | struct Bad<const N: usize, T> {
-   |           -----------------^- help: reorder the parameters: lifetimes, then types, then consts: `<T, const N: usize>`
+   |           -----------------^- help: reorder the parameters: `<T, const N: usize>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts
 
 error: lifetime parameters must be declared prior to const parameters
   --> $DIR/argument_order.rs:11:32
    |
 LL | struct AlsoBad<const N: usize, 'a, T, 'b, const M: usize, U> {
-   |               -----------------^^-----^^-------------------- help: reorder the parameters: lifetimes, then types, then consts: `<'a, 'b, T, U, const N: usize, const M: usize>`
+   |               -----------------^^-----^^-------------------- help: reorder the parameters: `<'a, 'b, T, U, const N: usize, const M: usize>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts
 
 error: type parameters must be declared prior to const parameters
   --> $DIR/argument_order.rs:11:36
    |
 LL | struct AlsoBad<const N: usize, 'a, T, 'b, const M: usize, U> {
-   |               ---------------------^----------------------^- help: reorder the parameters: lifetimes, then types, then consts: `<'a, 'b, T, U, const N: usize, const M: usize>`
+   |               ---------------------^----------------------^- help: reorder the parameters: `<'a, 'b, T, U, const N: usize, const M: usize>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts
 
 error[E0747]: lifetime provided when a type was expected
   --> $DIR/argument_order.rs:19:23

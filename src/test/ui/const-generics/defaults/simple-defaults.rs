@@ -5,13 +5,13 @@
 #![cfg_attr(full, allow(incomplete_features))]
 #![allow(dead_code)]
 
-struct FixedOutput<'a, const N: usize, T=u32> {
-  //[min]~^ ERROR type parameters must be declared prior to const parameters
-  out: &'a [T; N],
+struct FixedOutput<'a, const N: usize, T = u32> {
+    //[min]~^ ERROR using type defaults and const parameters in the same parameter list
+    out: &'a [T; N],
 }
 
 trait FixedOutputter {
-  fn out(&self) -> FixedOutput<'_, 10>;
+    fn out(&self) -> FixedOutput<'_, 10>;
 }
 
 fn main() {}

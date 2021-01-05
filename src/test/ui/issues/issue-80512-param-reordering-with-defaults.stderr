@@ -1,8 +1,10 @@
-error: lifetime parameters must be declared prior to type parameters
+error: lifetime parameters must be declared prior to defaulted parameters
   --> $DIR/issue-80512-param-reordering-with-defaults.rs:3:18
    |
 LL | struct S<T = (), 'a>(&'a T);
-   |         ---------^^- help: reorder the parameters: lifetimes, then types, then consts: `<'a, T = ()>`
+   |         ---------^^- help: reorder the parameters: `<'a, T = ()>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts, then defaulted parameters
 
 error: aborting due to previous error
 

@@ -1,10 +1,16 @@
-error: type parameters with a default must be trailing
-  --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:11:12
+error: using type defaults and const parameters in the same parameter list is currently not permitted
+  --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:11:31
    |
 LL | struct Bar<T = [u8; N], const N: usize>(T);
-   |            ^
+   |                               ^
+
+error: const parameters must be declared prior to defaulted parameters
+  --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:11:31
    |
-   = note: using type defaults and const parameters in the same parameter list is currently not permitted
+LL | struct Bar<T = [u8; N], const N: usize>(T);
+   |           --------------------^-------- help: reorder the parameters: `<const N: usize, T = [u8; N]>`
+   |
+   = note: the expected order for parameters is: lifetimes, then types, then consts, then defaulted parameters
 
 error: generic parameters may not be used in const operations
   --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:6:44
@@ -21,5 +27,5 @@ error: constant values inside of type parameter defaults must not depend on gene
 LL | struct Bar<T = [u8; N], const N: usize>(T);
    |                     ^ the anonymous constant must not depend on the parameter `N`
 
-error: aborting due to 3 previous errors
+error: aborting due to 4 previous errors
 

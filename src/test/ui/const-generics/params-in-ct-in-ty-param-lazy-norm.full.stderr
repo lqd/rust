@@ -1,10 +1,10 @@
-error: type parameters with a default must be trailing
-  --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:11:12
+error: const parameters must be declared prior to defaulted parameters
+  --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:11:31
    |
 LL | struct Bar<T = [u8; N], const N: usize>(T);
-   |            ^
+   |           --------------------^-------- help: reorder the parameters: `<const N: usize, T = [u8; N]>`
    |
-   = note: using type defaults and const parameters in the same parameter list is currently not permitted
+   = note: the expected order for parameters is: lifetimes, then consts and types, then defaulted parameters
 
 error: constant values inside of type parameter defaults must not depend on generic parameters
   --> $DIR/params-in-ct-in-ty-param-lazy-norm.rs:6:44
