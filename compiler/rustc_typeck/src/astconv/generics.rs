@@ -190,7 +190,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         match (arg, &param.kind, arg_count.explicit_late_bound) {
                             (GenericArg::Lifetime(_), GenericParamDefKind::Lifetime, _)
                             | (GenericArg::Type(_), GenericParamDefKind::Type { .. }, _)
-                            | (GenericArg::Const(_), GenericParamDefKind::Const, _) => {
+                            | (GenericArg::Const(_), GenericParamDefKind::Const { .. }, _) => {
                                 substs.push(ctx.provided_kind(param, arg));
                                 args.next();
                                 params.next();
@@ -237,15 +237,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                                         has_default,
                                                         ..
                                                     } => ParamKindOrd::Type { has_default },
-                                                    GenericParamDefKind::Const => {
-                                                        // FIXME(const_generics_defaults): update
-                                                        // this when the defaults have also been
-                                                        // added to `GenericParamDefKind`
+                                                    GenericParamDefKind::Const { has_default } => {
                                                         ParamKindOrd::Const {
                                                             unordered: tcx
                                                                 .features()
                                                                 .const_generics,
-                                                            has_default: false,
+                                                            has_default,
                                                         }
                                                     }
                                                 },
@@ -394,7 +391,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 GenericParamDefKind::Type { has_default, .. } => {
                     defaults.types += has_default as usize
                 }
-                GenericParamDefKind::Const => {
+                GenericParamDefKind::Const { .. } => {
                     // FIXME(const_generics_defaults)
                 }
             };

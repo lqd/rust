@@ -423,7 +423,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             self.astconv.ast_ty_to_ty(&ty).into()
                         }
                     }
-                    (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
+                    (GenericParamDefKind::Const { .. }, GenericArg::Const(ct)) => {
+                        // FIXME(const_generics_defaults)
                         ty::Const::from_opt_const_arg_anon_const(
                             tcx,
                             ty::WithOptConstParam {
@@ -484,7 +485,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             tcx.ty_error().into()
                         }
                     }
-                    GenericParamDefKind::Const => {
+                    GenericParamDefKind::Const { .. } => {
                         let ty = tcx.at(self.span).type_of(param.def_id);
                         // FIXME(const_generics_defaults)
                         if infer_args {
