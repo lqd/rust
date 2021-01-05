@@ -39,7 +39,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let kind_ord = match kind {
             "lifetime" => ParamKindOrd::Lifetime,
             "type" => ParamKindOrd::Type { has_default: false },
-            "constant" => ParamKindOrd::Const { unordered },
+            "constant" => ParamKindOrd::Const { unordered, has_default: false },
             // It's more concise to match on the string representation, though it means
             // the match is non-exhaustive.
             _ => bug!("invalid generic parameter kind {}", kind),
@@ -54,7 +54,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let arg_ord = match arg {
             GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
             GenericArg::Type(_) => ParamKindOrd::Type { has_default: false },
-            GenericArg::Const(_) => ParamKindOrd::Const { unordered },
+            GenericArg::Const(_) => ParamKindOrd::Const { unordered, has_default: false },
         };
 
         if matches!(arg, GenericArg::Type(hir::Ty { kind: hir::TyKind::Path { .. }, .. }))
@@ -238,10 +238,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                                         ..
                                                     } => ParamKindOrd::Type { has_default },
                                                     GenericParamDefKind::Const => {
+                                                        // FIXME(const_generics_defaults): update
+                                                        // this when the defaults have also been
+                                                        // added to `GenericParamDefKind`
                                                         ParamKindOrd::Const {
                                                             unordered: tcx
                                                                 .features()
                                                                 .const_generics,
+                                                            has_default: false,
                                                         }
                                                     }
                                                 },
@@ -267,6 +271,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                             }
                                             GenericArg::Const(_) => ParamKindOrd::Const {
                                                 unordered: tcx.features().const_generics,
+                                                has_default: false,
                                             },
                                         }),
                                         Some(&format!(

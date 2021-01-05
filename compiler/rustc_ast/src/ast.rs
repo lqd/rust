@@ -318,11 +318,15 @@ pub enum ParamKindOrd {
     Type {
         has_default: bool,
     },
-    // `unordered` is only `true` if `sess.has_features().const_generics`
-    // is active. Specifically, if it's only `min_const_generics`, it will still require
-    // ordering consts after types.
+    /// Generic const parameters can have a default value with the `const_generics_defaults`
+    /// feature, e.g `<const N: usize = 0>`. All defaulted generic parameters have to be located at
+    /// the end of the parameter list.
     Const {
+        // `unordered` is only `true` if `sess.has_features().const_generics`
+        // is active. Specifically, if it's only `min_const_generics`, it will still require
+        // ordering consts after types.
         unordered: bool,
+        has_default: bool,
     },
 }
 
@@ -331,12 +335,14 @@ impl Ord for ParamKindOrd {
         use ParamKindOrd::*;
         let to_int = |v| match v {
             Lifetime => 0,
-            Type { has_default: false } | Const { unordered: true } => 1,
+            Type { has_default: false } | Const { unordered: true, has_default: false } => 1,
             // technically both consts should be ordered equally,
             // but only one is ever encountered at a time, so this is
             // fine.
-            Const { unordered: false } => 2,
-            Type { has_default: true } => 3,
+            Const { unordered: false, has_default: false } => 2,
+
+            // All defaulted parameters have to be trailing.
+            Type { has_default: true } | Const { has_default: true, .. } => 3,
         };
 
         to_int(*self).cmp(&to_int(*other))

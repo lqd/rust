@@ -753,7 +753,10 @@ fn validate_generic_param_order(
                 }
                 let ty = pprust::ty_to_string(ty);
                 let unordered = sess.features_untracked().const_generics;
-                (ParamKindOrd::Const { unordered }, format!("const {}: {}", param.ident, ty))
+                (
+                    ParamKindOrd::Const { unordered, has_default },
+                    format!("const {}: {}", param.ident, ty),
+                )
             }
         };
 
@@ -789,14 +792,19 @@ fn validate_generic_param_order(
                 }
             }
             match kind {
-                GenericParamKind::Lifetime => (),
+                GenericParamKind::Lifetime
+                | GenericParamKind::Type { default: None }
+                | GenericParamKind::Const { default: None, .. } => (),
+
                 GenericParamKind::Type { default: Some(default) } => {
                     ordered_params += " = ";
                     ordered_params += &pprust::ty_to_string(default);
                 }
-                GenericParamKind::Type { default: None } => (),
-                // FIXME(const_generics_defaults)
-                GenericParamKind::Const { ty: _, kw_span: _, default: _ } => (),
+
+                GenericParamKind::Const { default: Some(default), .. } => {
+                    ordered_params += " = ";
+                    ordered_params += &pprust::expr_to_string(&default.value);
+                }
             }
             first = false;
         }
@@ -807,7 +815,8 @@ fn validate_generic_param_order(
         // `max_param` could be one of the parameter kinds forced to be trailing, because of a
         // default value. Make sure the error message fits when that's the case.
         let max_param = match max_param {
-            ParamKindOrd::Type { has_default: true } => "defaulted".to_string(),
+            ParamKindOrd::Type { has_default: true }
+            | ParamKindOrd::Const { has_default: true, .. } => "defaulted".to_string(),
             _ => max_param.to_string(),
         };
         let mut err =
@@ -1177,11 +1186,12 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
     fn visit_generics(&mut self, generics: &'a Generics) {
         // Check whether the generics have incompatibilities: type parameters with default values,
-        // used together with const parameters, under `min_const_generics`
+        // used together with const parameters, under `min_const_generics`.
         let mut has_ty_default = false;
         let mut has_const = false;
         for param in &generics.params {
             match param.kind {
+                GenericParamKind::Lifetime | GenericParamKind::Type { default: None, .. } => (),
                 GenericParamKind::Type { default: Some(ref default), .. } => {
                     has_ty_default = true;
 
@@ -1216,7 +1226,6 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                         err.emit();
                     }
                 }
-                _ => (),
             }
         }
 
