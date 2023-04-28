@@ -145,6 +145,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
         member_constraints: MemberConstraintSet::default(),
         type_tests: Vec::default(),
         universe_causes: FxIndexMap::default(),
+        issuing_regions: Default::default(),
     };
 
     let CreateResult {
@@ -928,6 +929,8 @@ pub(crate) struct MirTypeckRegionConstraints<'tcx> {
     pub(crate) universe_causes: FxIndexMap<ty::UniverseIndex, UniverseInfo<'tcx>>,
 
     pub(crate) type_tests: Vec<TypeTest<'tcx>>,
+
+    pub(crate) issuing_regions: FxIndexMap<RegionVid, crate::BorrowIndex>,
 }
 
 impl<'tcx> MirTypeckRegionConstraints<'tcx> {
@@ -948,6 +951,14 @@ impl<'tcx> MirTypeckRegionConstraints<'tcx> {
                 region
             }
         }
+    }
+
+    pub(crate) fn record_issuing_origin(
+        &mut self,
+        origin: RegionVid,
+        issued_loan: crate::BorrowIndex,
+    ) {
+        self.issuing_regions.insert(origin, issued_loan);
     }
 }
 
@@ -2440,6 +2451,10 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     location_table.mid_index(location),
                 ));
             }
+        }
+
+        if let Some(borrow_idx) = borrow_set.get_index_of(&location) {
+            constraints.record_issuing_origin(borrow_region.as_var(), borrow_idx);
         }
 
         // If we are reborrowing the referent of another reference, we
