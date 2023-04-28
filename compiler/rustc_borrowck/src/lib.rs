@@ -251,6 +251,7 @@ fn do_mir_borrowck<'tcx>(
         polonius_output,
         opt_closure_req,
         nll_errors,
+        issuing_regions,
     } = nll::compute_regions(
         &infcx,
         free_regions,
@@ -338,6 +339,7 @@ fn do_mir_borrowck<'tcx>(
                 next_region_name: RefCell::new(1),
                 polonius_output: None,
                 errors,
+                issuing_regions: Default::default(),
             };
             promoted_mbcx.report_move_errors(move_errors);
             errors = promoted_mbcx.errors;
@@ -367,6 +369,7 @@ fn do_mir_borrowck<'tcx>(
         next_region_name: RefCell::new(1),
         polonius_output,
         errors,
+        issuing_regions,
     };
 
     // Compute and report region errors, if any.
@@ -611,6 +614,8 @@ struct MirBorrowckCtxt<'cx, 'tcx> {
     polonius_output: Option<Rc<PoloniusOutput>>,
 
     errors: error::BorrowckErrors<'tcx>,
+
+    issuing_regions: FxIndexMap<RegionVid, BorrowIndex>,
 }
 
 // Check that:

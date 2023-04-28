@@ -10,7 +10,7 @@ use rustc_middle::mir::{
     Body, ClosureOutlivesSubject, ClosureRegionRequirements, LocalKind, Location, Promoted,
     START_BLOCK,
 };
-use rustc_middle::ty::{self, OpaqueHiddenType, TyCtxt};
+use rustc_middle::ty::{self, OpaqueHiddenType, RegionVid, TyCtxt};
 use rustc_span::symbol::sym;
 use std::env;
 use std::io;
@@ -49,6 +49,7 @@ pub(crate) struct NllOutput<'tcx> {
     pub polonius_output: Option<Rc<PoloniusOutput>>,
     pub opt_closure_req: Option<ClosureRegionRequirements<'tcx>>,
     pub nll_errors: RegionErrors<'tcx>,
+    pub(crate) issuing_regions: FxIndexMap<RegionVid, crate::BorrowIndex>,
 }
 
 /// Rewrites the regions in the MIR to use NLL variables, also scraping out the set of universal
@@ -244,6 +245,7 @@ pub(crate) fn compute_regions<'cx, 'tcx>(
         member_constraints,
         universe_causes,
         type_tests,
+        issuing_regions,
     } = constraints;
     let placeholder_indices = Rc::new(placeholder_indices);
 
@@ -317,6 +319,7 @@ pub(crate) fn compute_regions<'cx, 'tcx>(
         polonius_output,
         opt_closure_req: closure_region_requirements,
         nll_errors,
+        issuing_regions,
     }
 }
 
