@@ -311,6 +311,10 @@ fn sccs_info<'cx, 'tcx>(
 }
 
 impl<'tcx> RegionInferenceContext<'tcx> {
+    pub(crate) fn liveness_constraints(&self) -> &LivenessValues<RegionVid> {
+        &self.liveness_constraints
+    }
+
     /// Creates a new region inference context with a total of
     /// `num_region_variables` valid inference variables; the first N
     /// of those will be constant regions representing the free
