@@ -17,8 +17,9 @@ extern crate rustc_middle;
 #[macro_use]
 extern crate tracing;
 
-use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
+use rustc_data_structures::fx::{FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::graph::dominators::Dominators;
+use rustc_data_structures::graph::WithSuccessors;
 use rustc_errors::{Diagnostic, DiagnosticBuilder, DiagnosticMessage, SubdiagnosticMessage};
 use rustc_fluent_macro::fluent_messages;
 use rustc_hir as hir;
@@ -1048,16 +1049,74 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         rw: ReadOrWrite,
         flow_state: &Flows<'cx, 'tcx>,
     ) -> bool {
+        let regioncx = Rc::clone(&self.regioncx);
+        let liveness = regioncx.liveness_constraints();
+
         let mut error_reported = false;
         let tcx = self.infcx.tcx;
         let body = self.body;
-        let borrow_set = self.borrow_set.clone();
+
+        let borrow_set = Rc::clone(&self.borrow_set);
 
         // Use polonius output if it has been enabled.
-        let polonius_output = self.polonius_output.clone();
-        let borrows_in_scope = if let Some(polonius) = &polonius_output {
-            let location = self.location_table.start_index(location);
-            Either::Left(polonius.errors_at(location).iter().copied())
+        let _polonius_output = self.polonius_output.clone();
+        // let borrows_in_scope = if let Some(polonius) = &polonius_output {
+        //     let location = self.location_table.start_index(location);
+        //     Either::Left(polonius.errors_at(location).iter().copied())
+        // } else {
+        //     Either::Right(flow_state.borrows.iter())
+        // };
+        let borrows_in_scope = if std::env::var("POLONIUS2").is_ok() {
+            // Collect loans in scope: the set of loans whose issuing regions can reach, via the subset
+            // graph, the regions live at this location.
+            let sccs = &regioncx.constraint_sccs;
+            let mut loans = FxHashSet::default();
+            for region in liveness.live_regions_at(location) {
+                // eprintln!("region {region:?} live at {location:?}");
+
+                let scc_region = sccs.scc(region);
+                for (&issuing_region, &loan) in &self.issuing_regions {
+                    // Regions can always reach themselves, but IIUC the loan is not in scope even if it's issued at this location
+                    if issuing_region == region {
+                        continue;
+                    }
+
+                    let scc_issuing_region = sccs.scc(issuing_region);
+
+                    let mut issuing_region_can_reach_live_region = false;
+                    for succ in sccs.depth_first_search(scc_issuing_region) {
+                        // eprintln!("{scc_issuing_region:?} has successor region {succ:?}");
+                        if succ == scc_region {
+                            issuing_region_can_reach_live_region = true;
+                            break;
+                        }
+                    }
+
+                    // Can the issuing region SCC reach the live region SCC ?
+                    if issuing_region_can_reach_live_region {
+                        // eprintln!(
+                        //     "region {region:?} live at {location:?} can be reached by issuing region {issuing_region:?} of loan {loan:?}"
+                        // );
+                        loans.insert(loan);
+                    }
+                }
+            }
+
+            // debugging for tests
+            #[allow(rustc::potential_query_instability)]
+            let mut loans: Vec<_> = loans.into_iter().collect();
+            loans.sort();
+
+            {
+                // eprintln!("loans_in_scope at {location:?}: {:?}", loans);
+
+                let borrows: Vec<_> = flow_state.borrows.iter().collect();
+                // eprintln!("borrows_in_scope at {location:?}: {:?}", borrows);
+
+                // assert_eq!(loans, borrows);
+            }
+
+            Either::Left(loans.into_iter())
         } else {
             Either::Right(flow_state.borrows.iter())
         };
