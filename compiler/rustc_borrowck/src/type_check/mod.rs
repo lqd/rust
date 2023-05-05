@@ -930,7 +930,7 @@ pub(crate) struct MirTypeckRegionConstraints<'tcx> {
 
     pub(crate) type_tests: Vec<TypeTest<'tcx>>,
 
-    pub(crate) issuing_regions: FxIndexMap<RegionVid, crate::BorrowIndex>,
+    pub(crate) issuing_regions: FxIndexMap<RegionVid, (crate::BorrowIndex, Location)>,
 }
 
 impl<'tcx> MirTypeckRegionConstraints<'tcx> {
@@ -957,8 +957,9 @@ impl<'tcx> MirTypeckRegionConstraints<'tcx> {
         &mut self,
         origin: RegionVid,
         issued_loan: crate::BorrowIndex,
+        loan_issued_at: Location,
     ) {
-        self.issuing_regions.insert(origin, issued_loan);
+        self.issuing_regions.insert(origin, (issued_loan, loan_issued_at));
     }
 }
 
@@ -2454,7 +2455,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         }
 
         if let Some(borrow_idx) = borrow_set.get_index_of(&location) {
-            constraints.record_issuing_origin(borrow_region.as_var(), borrow_idx);
+            constraints.record_issuing_origin(borrow_region.as_var(), borrow_idx, location);
         }
 
         // If we are reborrowing the referent of another reference, we

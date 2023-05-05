@@ -617,7 +617,8 @@ struct MirBorrowckCtxt<'cx, 'tcx> {
 
     errors: error::BorrowckErrors<'tcx>,
 
-    issuing_regions: FxIndexMap<RegionVid, BorrowIndex>,
+    /// `region` issues `loan` idx at `location`.
+    issuing_regions: FxIndexMap<RegionVid, (BorrowIndex, Location)>,
 }
 
 // Check that:
@@ -1076,7 +1077,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 // eprintln!("region {live_region:?} live at {location:?}");
 
                 let region_scc = sccs.scc(live_region);
-                for (&issuing_region, &loan) in &self.issuing_regions {
+                for (&issuing_region, &(loan, issuing_location)) in &self.issuing_regions {
                     // // Regions can always reach themselves, but IIUC the loan is not in scope even
                     // // if it's issued at this location
                     // if issuing_region == live_region {
@@ -1103,8 +1104,15 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                     // Can the issuing region SCC reach the live region SCC ?
                     if issuing_region_can_reach_live_region {
+
+                        // Welcome to Even More Inefficient City. Population: this code.
+                        let issuing_location_precedes_current_location =
+                            issuing_location.is_predecessor_of(location, body);
+
                         // eprintln!("region {live_region:?} live at {location:?} can be reached by issuing region {issuing_region:?} of loan {loan:?}");
-                        loans.insert(loan);
+                        if issuing_location_precedes_current_location {
+                            loans.insert(loan);
+                        }
                     }
                 }
             }
