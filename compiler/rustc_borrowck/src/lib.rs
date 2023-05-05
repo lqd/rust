@@ -551,6 +551,7 @@ struct MirBorrowckCtxt<'cx, 'tcx> {
 
     /// Map from MIR `Location` to `LocationIndex`; created
     /// when MIR borrowck begins.
+    #[allow(dead_code)]
     location_table: &'cx LocationTable,
 
     movable_generator: bool,
@@ -1071,22 +1072,30 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             // graph, the regions live at this location.
             let sccs = &regioncx.constraint_sccs;
             let mut loans = FxHashSet::default();
-            for region in liveness.live_regions_at(location) {
-                // eprintln!("region {region:?} live at {location:?}");
+            for live_region in liveness.live_regions_at(location) {
+                // eprintln!("region {live_region:?} live at {location:?}");
 
-                let scc_region = sccs.scc(region);
+                let region_scc = sccs.scc(live_region);
                 for (&issuing_region, &loan) in &self.issuing_regions {
-                    // Regions can always reach themselves, but IIUC the loan is not in scope even if it's issued at this location
-                    if issuing_region == region {
+                    // // Regions can always reach themselves, but IIUC the loan is not in scope even
+                    // // if it's issued at this location
+                    // if issuing_region == live_region {
+                    //     continue;
+                    // }
+
+                    let issuing_region_scc = sccs.scc(issuing_region);
+
+                    // Actually, any issuing region can reach this live region if they're in the
+                    // same SCC, but IIUC the loan is not in scope even if it's issued at this
+                    // location.
+                    if issuing_region_scc == region_scc {
                         continue;
                     }
 
-                    let scc_issuing_region = sccs.scc(issuing_region);
-
                     let mut issuing_region_can_reach_live_region = false;
-                    for succ in sccs.depth_first_search(scc_issuing_region) {
-                        // eprintln!("{scc_issuing_region:?} has successor region {succ:?}");
-                        if succ == scc_region {
+                    for succ_scc in sccs.depth_first_search(issuing_region_scc) {
+                        // eprintln!("{issuing_region_scc:?} has successor region scc {succ_scc:?}");
+                        if succ_scc == region_scc {
                             issuing_region_can_reach_live_region = true;
                             break;
                         }
@@ -1094,9 +1103,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                     // Can the issuing region SCC reach the live region SCC ?
                     if issuing_region_can_reach_live_region {
-                        // eprintln!(
-                        //     "region {region:?} live at {location:?} can be reached by issuing region {issuing_region:?} of loan {loan:?}"
-                        // );
+                        // eprintln!("region {live_region:?} live at {location:?} can be reached by issuing region {issuing_region:?} of loan {loan:?}");
                         loans.insert(loan);
                     }
                 }
@@ -1110,9 +1117,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             {
                 // eprintln!("loans_in_scope at {location:?}: {:?}", loans);
 
-                let borrows: Vec<_> = flow_state.borrows.iter().collect();
+                // let borrows: Vec<_> = flow_state.borrows.iter().collect();
                 // eprintln!("borrows_in_scope at {location:?}: {:?}", borrows);
-
                 // assert_eq!(loans, borrows);
             }
 
