@@ -288,6 +288,13 @@ fn do_mir_borrowck<'tcx>(
 
     let regioncx = Rc::new(regioncx);
 
+    if std::env::var("LETSGO").is_ok() {
+        eprintln!("{} issuing regions", issuing_regions.len());
+        for (region, (loan, loc)) in &issuing_regions {
+            eprintln!("region {:?} issues loan {:?} at {:?}", region, loan, loc);
+        }
+    }
+
     let flow_borrows = Borrows::new(tcx, body, &regioncx, &borrow_set)
         .into_engine(tcx, body)
         .pass_name("borrowck")
@@ -339,7 +346,6 @@ fn do_mir_borrowck<'tcx>(
                 next_region_name: RefCell::new(1),
                 polonius_output: None,
                 errors,
-                issuing_regions: Default::default(),
             };
             promoted_mbcx.report_move_errors(move_errors);
             errors = promoted_mbcx.errors;
@@ -369,7 +375,6 @@ fn do_mir_borrowck<'tcx>(
         next_region_name: RefCell::new(1),
         polonius_output,
         errors,
-        issuing_regions,
     };
 
     // Compute and report region errors, if any.
@@ -614,8 +619,6 @@ struct MirBorrowckCtxt<'cx, 'tcx> {
     polonius_output: Option<Rc<PoloniusOutput>>,
 
     errors: error::BorrowckErrors<'tcx>,
-
-    issuing_regions: FxIndexMap<RegionVid, BorrowIndex>,
 }
 
 // Check that:

@@ -49,7 +49,7 @@ pub(crate) struct NllOutput<'tcx> {
     pub polonius_output: Option<Rc<PoloniusOutput>>,
     pub opt_closure_req: Option<ClosureRegionRequirements<'tcx>>,
     pub nll_errors: RegionErrors<'tcx>,
-    pub(crate) issuing_regions: FxIndexMap<RegionVid, crate::BorrowIndex>,
+    pub(crate) issuing_regions: FxIndexMap<RegionVid, (crate::BorrowIndex, Location)>,
 }
 
 /// Rewrites the regions in the MIR to use NLL variables, also scraping out the set of universal
