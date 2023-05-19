@@ -179,7 +179,7 @@ impl<N: Idx> LivenessValues<N> {
 
     pub(crate) fn live_regions_at(&self, location: Location) -> impl Iterator<Item = N> + '_ {
         let point = self.elements.point_from_location(location);
-        self.points.rows().filter(move |row| self.points.contains(*row, point))
+        self.points.rows().filter(move |&row| self.points.contains(row, point))
     }
 }
 

@@ -93,7 +93,7 @@ pub struct RegionInferenceContext<'tcx> {
     /// Contains the minimum universe of any variable within the same
     /// SCC. We will ensure that no SCC contains values that are not
     /// visible from this index.
-    scc_universes: IndexVec<ConstraintSccIndex, ty::UniverseIndex>,
+    pub(crate) scc_universes: IndexVec<ConstraintSccIndex, ty::UniverseIndex>,
 
     /// Contains a "representative" from each SCC. This will be the
     /// minimal RegionVid belonging to that universe. It is used as a

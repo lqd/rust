@@ -176,7 +176,85 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
 
         self.visit_stack.push(StackEntry { bb: location.block, lo: first_lo, hi: first_hi });
 
-        let polonius2 = std::env::var("POLONIUS2").is_ok();
+        while let Some(StackEntry { bb, lo, hi }) = self.visit_stack.pop() {
+            // If we process the first part of the first basic block (i.e. we encounter that block
+            // for the second time), we no longer have to visit its successors again.
+            let mut finished_early = bb == location.block && hi != first_hi;
+            for i in lo..=hi {
+                let location = Location { block: bb, statement_index: i };
+
+                // If region does not contain a point at the location, then add to list and skip
+                // successor locations.
+                if !self.regioncx.region_contains(borrow_region, location) {
+                    debug!("borrow {:?} gets killed at {:?}", borrow_index, location);
+                    self.borrows_out_of_scope_at_location
+                        .entry(location)
+                        .or_default()
+                        .push(borrow_index);
+                    finished_early = true;
+                    break;
+                }
+            }
+
+            if !finished_early {
+                // Add successor BBs to the work list, if necessary.
+                let bb_data = &self.body[bb];
+                debug_assert!(hi == bb_data.statements.len());
+                for succ_bb in bb_data.terminator().successors() {
+                    if !self.visited.insert(succ_bb) {
+                        if succ_bb == location.block && first_lo > 0 {
+                            // `succ_bb` has been seen before. If it wasn't
+                            // fully processed, add its first part to `stack`
+                            // for processing.
+                            self.visit_stack.push(StackEntry {
+                                bb: succ_bb,
+                                lo: 0,
+                                hi: first_lo - 1,
+                            });
+
+                            // And update this entry with 0, to represent the
+                            // whole BB being processed.
+                            first_lo = 0;
+                        }
+                    } else {
+                        // succ_bb hasn't been seen before. Add it to
+                        // `stack` for processing.
+                        self.visit_stack.push(StackEntry {
+                            bb: succ_bb,
+                            lo: 0,
+                            hi: self.body[succ_bb].statements.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        self.visited.clear();
+    }
+
+    fn precompute_loans_out_of_scope(
+        &mut self,
+        borrow_index: BorrowIndex,
+        borrow_region: RegionVid,
+        location: Location,
+    ) {
+        // We visit one BB at a time. The complication is that we may start in the
+        // middle of the first BB visited (the one containing `location`), in which
+        // case we may have to later on process the first part of that BB if there
+        // is a path back to its start.
+
+        // For visited BBs, we record the index of the first statement processed.
+        // (In fully processed BBs this index is 0.) Note also that we add BBs to
+        // `visited` once they are added to `stack`, before they are actually
+        // processed, because this avoids the need to look them up again on
+        // completion.
+        self.visited.insert(location.block);
+
+        let mut first_lo = location.statement_index;
+        let first_hi = self.body[location.block].statements.len();
+
+        self.visit_stack.push(StackEntry { bb: location.block, lo: first_lo, hi: first_hi });
+
         let liveness = self.regioncx.liveness_constraints();
         let sccs = &self.regioncx.constraint_sccs;
 
@@ -184,10 +262,20 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
         let scc_issuing_region = sccs.scc(borrow_region);
 
         let issuing_region_live_at_location = liveness.contains(borrow_region, location);
-        debug!(
-            "precompute_borrows_out_of_scope for loan {:?} from issuing region {:?}, starting at {:?}; region is live at this point: {}",
-            borrow_index, borrow_region, location, issuing_region_live_at_location
+        if std::env::var("LETSGO").is_ok() {
+            eprintln!(
+                "precompute_loans_out_of_scope for loan {:?} from issuing region {:?}, starting at {:?}; region is live at this point: {}",
+                borrow_index, borrow_region, location, issuing_region_live_at_location
+            );
+        }
+        assert!(
+            issuing_region_live_at_location,
+            "loan {:?} from issuing region {:?} has to be live at the issuing point {:?}",
+            borrow_index, borrow_region, location
         );
+
+        // FIXME: optimization somewhere, if an issuing region can reach a placeholder, that effectively means
+        // the loan is live at all points.
 
         while let Some(StackEntry { bb, lo, hi }) = self.visit_stack.pop() {
             // If we process the first part of the first basic block (i.e. we encounter that block
@@ -196,85 +284,96 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
             for i in lo..=hi {
                 let location = Location { block: bb, statement_index: i };
 
-                if polonius2 {
-                    // The loan is out of scope at point `location` if it's not contained within any live regions
+                // The loan is out of scope at point `location` if it's not contained within any live regions
 
-                    // FIXME: IIRC loans can also be issued in dead regions, so this is not quite right.
-                    // If we stop traversal at the first point where the loan is not contained within a live region,
-                    // then we will miss the location where the loan becomes live.
+                // FIXME: IIRC loans can also be issued in dead regions, so this is not quite right.
+                // If we stop traversal at the first point where the loan is not contained within a live region,
+                // then we will miss the location where the loan becomes live.
 
-                    let mut issuing_region_can_reach_live_regions = false;
+                let mut issuing_region_can_reach_live_regions = false;
 
-                    'traversal: for live_region in liveness.live_regions_at(location) {
-                        let live_region_scc = sccs.scc(live_region);
+                // TODO: `live_regions_at` does not contain all the placeholders that are by
+                // definition live at the `location`.
+                // - should we chain them here, and if so, before or after the live_regions
+                // - should the iterator contain them ?
+                let placeholders = self.regioncx.regions().filter(|&r| {
+                    use rustc_infer::infer::*;
+                    let origin = self.regioncx.var_infos[r].origin;
+                    let is_placeholder = matches!(
+                        origin,
+                        RegionVariableOrigin::Nll(NllRegionVariableOrigin::Placeholder(_))
+                    );
+                    is_placeholder
+                });
+                'traversal: for live_region in
+                    liveness.live_regions_at(location)
+                    .chain(placeholders)
+                {
+                    let live_region_scc = sccs.scc(live_region);
 
-                        // The issuing region can trivially reach any region in its SCC, so if the
-                        // live region is in that SCC, the loan is live and does not go out of scope here.
-                        // We can move on to the next location.
-                        //
-                        // TODO: we can remove this check if, and it seems like it does, the SCC DFS
-                        // returns the node from which we start traversal as the first reachable
-                        // node.
-                        if live_region_scc == scc_issuing_region {
+                    let issuing_region_universe = self.regioncx.scc_universes[scc_issuing_region];
+
+                    // The issuing region can trivially reach any region in its SCC, so if the
+                    // live region is in that SCC, the loan is live and does not go out of scope here.
+                    // We can move on to the next location.
+                    //
+                    // TODO: we can remove this check if, and it seems like it does, the SCC DFS
+                    // returns the node from which we start traversal as the first reachable
+                    // node.
+                    if live_region_scc == scc_issuing_region {
+                        if std::env::var("LETSGO").is_ok() {
+                            eprintln!(
+                                "issuing region {:?} scc {:?} ({issuing_region_universe:?}) is itself live at location {:?}, and so is loan {borrow_index:?}",
+                                borrow_region, scc_issuing_region, location
+                            );
+                        }
+                        issuing_region_can_reach_live_regions = true;
+                        break 'traversal;
+                    }
+
+                    for succ in sccs.depth_first_search(scc_issuing_region) {
+                        // eprintln!("{scc_issuing_region:?} has successor region {succ:?}");
+                        // let is_placeholder = false;
+                        // self.regioncx.var_origin()
+                        if succ == live_region_scc {
                             if std::env::var("LETSGO").is_ok() {
+                                let live_region_universe =
+                                    self.regioncx.scc_universes[live_region_scc];
                                 eprintln!(
-                                    "issuing region {:?} scc {:?} is itself live at location {:?}",
-                                    borrow_region, scc_issuing_region, location
+                                    "issuing region {:?} scc {:?} ({issuing_region_universe:?}) can reach live region {:?} scc {:?} ({live_region_universe:?}) at location {:?}, and so is loan {borrow_index:?}",
+                                    borrow_region,
+                                    scc_issuing_region,
+                                    live_region,
+                                    live_region_scc,
+                                    location,
                                 );
                             }
                             issuing_region_can_reach_live_regions = true;
                             break 'traversal;
                         }
-
-                        for succ in sccs.depth_first_search(scc_issuing_region) {
-                            // eprintln!("{scc_issuing_region:?} has successor region {succ:?}");
-                            if succ == live_region_scc {
-                                if std::env::var("LETSGO").is_ok() {
-                                    eprintln!(
-                                        "issuing region {:?} scc {:?} can reach live region {:?} scc {:?} at location {:?}",
-                                        borrow_region,
-                                        scc_issuing_region,
-                                        live_region,
-                                        live_region_scc,
-                                        location
-                                    );
-                                }
-                                issuing_region_can_reach_live_regions = true;
-                                break 'traversal;
-                            }
-                        }
-
-                        // If a single live region is reachable from the issuing region, then the
-                        // loan is still live at this point, and can stop checking other live
-                        // regions at this location, and go to the next location.
-                        if issuing_region_can_reach_live_regions {
-                            break 'traversal;
-                        }
                     }
 
                     // If a single live region is reachable from the issuing region, then the
-                    // loan is still live at this point.
-                    if !issuing_region_can_reach_live_regions {
-                        debug!("loan {:?} gets killed at {:?}", borrow_index, location);
-                        self.borrows_out_of_scope_at_location
-                            .entry(location)
-                            .or_default()
-                            .push(borrow_index);
-                        finished_early = true;
-                        break;
+                    // loan is still live at this point, and can stop checking other live
+                    // regions at this location, and go to the next location.
+                    if issuing_region_can_reach_live_regions {
+                        break 'traversal;
                     }
-                } else {
-                    // If region does not contain a point at the location, then add to list and skip
-                    // successor locations.
-                    if !self.regioncx.region_contains(borrow_region, location) {
-                        debug!("borrow {:?} gets killed at {:?}", borrow_index, location);
-                        self.borrows_out_of_scope_at_location
-                            .entry(location)
-                            .or_default()
-                            .push(borrow_index);
-                        finished_early = true;
-                        break;
+                }
+
+                // If a single live region is reachable from the issuing region, then the
+                // loan is still live at this point.
+                if !issuing_region_can_reach_live_regions {
+                    // debug!("loan {:?} gets killed at {:?}", borrow_index, location);
+                    if std::env::var("LETSGO").is_ok() {
+                        eprintln!("loan {:?} gets killed at {:?}", borrow_index, location);
                     }
+                    self.borrows_out_of_scope_at_location
+                        .entry(location)
+                        .or_default()
+                        .push(borrow_index);
+                    finished_early = true;
+                    break;
                 }
             }
 
@@ -330,11 +429,38 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
             prec.precompute_borrows_out_of_scope(borrow_index, borrow_region, location);
         }
 
+        let mut borrows_out_of_scope_at_location = prec.borrows_out_of_scope_at_location.clone();
+
+        if std::env::var("POLONIUS2").is_ok() {
+            let mut polonius_prec = OutOfScopePrecomputer::new(body, nonlexical_regioncx);
+            for (borrow_index, borrow_data) in borrow_set.iter_enumerated() {
+                let borrow_region = borrow_data.region;
+                let location = borrow_data.reserve_location;
+
+                polonius_prec.precompute_loans_out_of_scope(borrow_index, borrow_region, location);
+            }
+
+            let mut borrows_out_of_scope: Vec<_> =
+                prec.borrows_out_of_scope_at_location.iter().collect();
+            borrows_out_of_scope.sort();
+
+            let mut loans_out_of_scope: Vec<_> =
+                polonius_prec.borrows_out_of_scope_at_location.iter().collect();
+            loans_out_of_scope.sort();
+
+            // assert_eq!(
+            //     borrows_out_of_scope, loans_out_of_scope,
+            //     "borrows out of scope, and loans out of scope, should be the same"
+            // );
+
+            borrows_out_of_scope_at_location = polonius_prec.borrows_out_of_scope_at_location;
+        }
+
         Borrows {
             tcx,
             body,
             borrow_set,
-            borrows_out_of_scope_at_location: prec.borrows_out_of_scope_at_location,
+            borrows_out_of_scope_at_location,
         }
     }
 

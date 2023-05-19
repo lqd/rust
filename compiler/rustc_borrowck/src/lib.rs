@@ -288,12 +288,31 @@ fn do_mir_borrowck<'tcx>(
 
     let regioncx = Rc::new(regioncx);
 
-    if std::env::var("LETSGO").is_ok() {
-        eprintln!("{} issuing regions", issuing_regions.len());
-        for (region, (loan, loc)) in &issuing_regions {
-            eprintln!("region {:?} issues loan {:?} at {:?}", region, loan, loc);
-        }
-    }
+    // if std::env::var("LETSGO").is_ok() {
+    //     eprintln!("{} issuing regions", issuing_regions.len());
+    //     for (region, (loan, loc)) in &issuing_regions {
+    //         eprintln!("region {:?} issues loan {:?} at {:?}", region, loan, loc);
+    //     }
+
+    //     let sccs = &regioncx.constraint_sccs;
+
+    //     let mut reachability = rustc_index::bit_set::SparseBitMatrix::new(sccs.num_sccs());
+    //     for (issuing_region, _) in &issuing_regions {
+    //         use rustc_data_structures::graph::WithSuccessors;
+
+    //         let issuing_region_scc = sccs.scc(*issuing_region);
+    //         for succ in sccs.depth_first_search(issuing_region_scc) {
+    //             reachability.insert(issuing_region_scc, succ);
+    //         }
+    //     }
+
+    //     for (&issuing_region, (loan, loc)) in &issuing_regions {
+    //         let issuing_region_scc = sccs.scc(issuing_region);
+    //         let issuing_universe = regioncx.region_universe(issuing_region);
+    //         let dst: Vec<_> = reachability.iter(issuing_region_scc).map(|scc| (scc, regioncx.scc_universes[scc])).collect();
+    //         eprintln!("issuing region {:?} of loan {:?} (location: {:?}, {issuing_universe:?}) can reach {} SCCs: {:?}", issuing_region, loan, loc, dst.len(), dst);
+    //     }
+    // }
 
     let flow_borrows = Borrows::new(tcx, body, &regioncx, &borrow_set)
         .into_engine(tcx, body)
