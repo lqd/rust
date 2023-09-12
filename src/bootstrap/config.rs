@@ -1565,6 +1565,10 @@ impl Config {
                 config.channel == "dev" && crate::llvm::is_ci_llvm_available(&config, false);
         }
 
+        if config.llvm_from_ci {
+            config.lld_enabled = true;
+        }
+
         if let Some(t) = toml.target {
             for (triple, cfg) in t {
                 let mut target = Target::from_triple(&triple);
