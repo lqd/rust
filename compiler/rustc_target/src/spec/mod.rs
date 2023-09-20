@@ -162,11 +162,11 @@ pub enum LinkerFlavor {
 
 /// Linker flavors available externally through command line (`-Clinker-flavor`)
 /// or json target specifications.
-/// FIXME: This set has accumulated historically, bring it more in line with the internal
-/// linker flavors (`LinkerFlavor`).
+/// This set has accumulated historically, and contains both (stable and unstable) legacy values, as
+/// well as modern ones matching the internal linker flavors (`LinkerFlavor`).
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LinkerFlavorCli {
-    // New (unstable) flavors, with direct counterparts in `LinkerFlavor`.
+    // Modern (unstable) flavors, with direct counterparts in `LinkerFlavor`.
     Gnu(Cc, Lld),
     Darwin(Cc, Lld),
     WasmLld(Cc),
@@ -177,11 +177,13 @@ pub enum LinkerFlavorCli {
     Bpf,
     Ptx,
 
-    // Below: the legacy stable values.
+    // Legacy stable values
     Gcc,
     Ld,
     Lld(LldFlavor),
     Em,
+
+    // Legacy unstable values
     BpfLinker,
     PtxLinker,
 }
@@ -509,7 +511,7 @@ linker_flavor_cli_impls! {
     (LinkerFlavorCli::Bpf) "bpf"
     (LinkerFlavorCli::Ptx) "ptx"
 
-    // Below: legacy stable values
+    // Legacy stable flavors
     (LinkerFlavorCli::Gcc) "gcc"
     (LinkerFlavorCli::Ld) "ld"
     (LinkerFlavorCli::Lld(LldFlavor::Ld)) "ld.lld"
@@ -517,6 +519,8 @@ linker_flavor_cli_impls! {
     (LinkerFlavorCli::Lld(LldFlavor::Link)) "lld-link"
     (LinkerFlavorCli::Lld(LldFlavor::Wasm)) "wasm-ld"
     (LinkerFlavorCli::Em) "em"
+
+    // Legacy unstable flavors
     (LinkerFlavorCli::BpfLinker) "bpf-linker"
     (LinkerFlavorCli::PtxLinker) "ptx-linker"
 }
