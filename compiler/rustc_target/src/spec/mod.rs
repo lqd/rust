@@ -693,6 +693,19 @@ impl LinkSelfContainedComponents {
     }
 }
 
+impl IntoIterator for LinkSelfContainedComponents {
+    type Item = LinkSelfContainedComponents;
+    type IntoIter = std::vec::IntoIter<LinkSelfContainedComponents>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LinkSelfContainedComponents::all_components()
+            .into_iter()
+            .filter(|&s| self.contains(s))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
 impl ToJson for LinkSelfContainedComponents {
     fn to_json(&self) -> Json {
         let components: Vec<_> = Self::all_components()
