@@ -668,7 +668,7 @@ impl LinkSelfContainedComponents {
     /// Return the component's name.
     ///
     /// Returns `None` if the bitflags aren't a singular component (but a mix of multiple flags).
-    fn as_str(self) -> Option<&'static str> {
+    pub fn as_str(self) -> Option<&'static str> {
         Some(match self {
             LinkSelfContainedComponents::CRT_OBJECTS => "crto",
             LinkSelfContainedComponents::LIBC => "libc",
