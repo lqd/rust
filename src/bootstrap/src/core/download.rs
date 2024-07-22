@@ -214,6 +214,7 @@ impl Config {
         // Try curl. If that fails and we are on windows, fallback to PowerShell.
         let mut curl = command("curl");
         curl.args([
+            "-L",
             "-y",
             "30",
             "-Y",
@@ -398,6 +399,28 @@ impl Config {
 
         self.create(&clippy_stamp, date);
         cargo_clippy
+    }
+
+    pub(crate) fn download_linker(&self) -> PathBuf {
+        if self.dry_run() {
+            return PathBuf::new();
+        }
+
+        use flate2::read::GzDecoder;
+        use std::io::Cursor;
+        use tar::Archive;
+
+        let dir = self.tempdir().join("mold");
+        t!(fs::create_dir_all(&dir));
+
+        let archive = dir.join("mold-2.32.1-x86_64-linux.tar.gz");
+        self.download_file("https://github.com/rui314/mold/releases/download/v2.32.1/mold-2.32.1-x86_64-linux.tar.gz", &archive, "non mais oh");
+        let input = std::fs::read(&archive).expect("couldn't read archive");
+
+        let gz = GzDecoder::new(Cursor::new(input));
+        let mut archive = Archive::new(gz);
+        archive.unpack(&dir).expect("couldn't decompress and unpack tar archive");
+        dir.join("mold-2.32.1-x86_64-linux").join("bin").join("ld.mold")
     }
 
     #[cfg(feature = "bootstrap-self-test")]

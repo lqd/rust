@@ -1820,6 +1820,16 @@ impl Step for Assemble {
                     &self_contained_lld_dir.join(exe(name, target_compiler.host)),
                 );
             }
+
+            // download self-contained linker and unpack it
+            if !builder.config.dry_run() {
+                let linker = builder.config.download_linker();
+                let dest = self_contained_lld_dir.join(exe("ld.lld", target_compiler.host));
+                t!(std::fs::copy(
+                    &linker,
+                    &dest
+                ));
+            }
         }
 
         // In addition to `rust-lld` also install `wasm-component-ld` when
