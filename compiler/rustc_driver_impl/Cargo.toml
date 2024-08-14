@@ -68,8 +68,14 @@ features = [
 ctrlc = "3.4.4"
 # tidy-alphabetical-end
 
+[dependencies.jemallocator]
+version = "0.5.4"
+optional = true
+features = ['unprefixed_malloc_on_supported_platforms']
+
 [features]
 # tidy-alphabetical-start
+jemalloc = ['dep:jemallocator']
 llvm = ['rustc_interface/llvm']
 max_level_info = ['rustc_log/max_level_info']
 rustc_use_parallel_compiler = [

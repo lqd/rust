@@ -1575,6 +1575,14 @@ pub fn install_ctrlc_handler() {
 }
 
 pub fn main() -> ! {
+    #[cfg(feature = "jemalloc")]
+    {
+        use jemallocator::Jemalloc;
+
+        #[global_allocator]
+        static GLOBAL: Jemalloc = Jemalloc;
+    }
+
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 

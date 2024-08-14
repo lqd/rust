@@ -318,6 +318,7 @@ const PERMITTED_RUSTC_DEPENDENCIES: &[&str] = &[
     "itertools",
     "itoa",
     "jemalloc-sys",
+    "jemallocator",
     "jobserver",
     "lazy_static",
     "leb128",

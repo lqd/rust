@@ -1886,6 +1886,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jemallocator"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0de374a9f8e63150e6f5e8a60cc14c668226d7a347d8aee1a45766e3c4dd3bc"
+dependencies = [
+ "jemalloc-sys",
+ "libc",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3573,6 +3583,7 @@ name = "rustc_driver_impl"
 version = "0.0.0"
 dependencies = [
  "ctrlc",
+ "jemallocator",
  "libc",
  "rustc_ast",
  "rustc_ast_lowering",
