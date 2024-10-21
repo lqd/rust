@@ -5,11 +5,12 @@ use std::time::{Duration, Instant};
 use itertools::Itertools;
 use rustc_abi::FIRST_VARIANT;
 use rustc_ast::expand::allocator::{ALLOCATOR_METHODS, AllocatorKind, global_fn_name};
-use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_data_structures::profiling::{get_resident_set_size, print_time_passes_entry};
 use rustc_data_structures::sync::{Lrc, par_map};
 use rustc_data_structures::unord::UnordMap;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::{DefId, DefIndex, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::bug;
@@ -816,6 +817,15 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     ongoing_codegen.codegen_finished(tcx);
 
+    // ---
+
+    dump_def_use_info(tcx, &codegen_units);
+    if tcx.crate_types() == [CrateType::Executable] {
+        analyze_def_use_info(tcx);
+    }
+
+    // ---
+
     // Since the main thread is sometimes blocked during codegen, we keep track
     // -Ztime-passes output manually.
     if tcx.sess.opts.unstable_opts.time_passes {
@@ -832,6 +842,461 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     ongoing_codegen.check_for_errors(tcx.sess);
     ongoing_codegen
+}
+
+#[allow(rustc::default_hash_types)]
+mod analysis {
+    use std::collections::{HashMap, HashSet};
+
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Default, Serialize, Deserialize)]
+    pub(crate) struct Analysis {
+        pub name: String,
+        pub metadata: String,
+
+        pub total_definitions: usize,
+        pub total_used: usize,
+        pub total_unused: usize,
+
+        pub codegened_symbols: HashSet<ExpectedSymbol>,
+
+        pub components: Vec<CrateAnalysis>,
+    }
+
+    #[derive(Default, Serialize, Deserialize)]
+    pub(crate) struct CrateAnalysis {
+        pub name: String,
+        pub metadata: String,
+        pub key: String,
+
+        pub total_definitions: usize,
+        pub total_used: usize,
+        pub total_unused: usize,
+
+        pub definitions_codegened: Vec<Definition>,
+        pub definitions_unused: Vec<Definition>,
+
+        // Monomorphizations per local def id, across the entire session
+        pub monomorphizations: HashMap<usize, HashSet<Monomorphization>>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct Definition {
+        pub def_idx: usize,
+
+        pub has_generics: bool,
+
+        /// symbol or def path
+        pub name: String,
+        // FIXME: add span?
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
+    pub(crate) struct ExpectedSymbol {
+        pub symbol: String,
+        // pub monomorphized_in: String,
+        // pub source_crate: String,
+        // FIXME: add span?
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+    pub(crate) struct Monomorphization {
+        pub crate_key: String,
+        pub symbol: String,
+    }
+}
+
+mod dump {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Default, Serialize, Deserialize)]
+    pub(crate) struct DumpCrate {
+        pub name: String,
+        pub metadata: String,
+        pub key: String,
+
+        pub is_dylib_or_proc_macro: bool,
+        pub dependencies: Vec<CrateDependency>,
+
+        pub definitions: Vec<LocalDefinition>,
+
+        /// Actually codegened items
+        pub monomorphizations: Vec<Monomorphization>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct CrateDependency {
+        pub crate_idx: usize,
+        pub name: String,
+        pub metadata: String,
+        pub key: String,
+    }
+
+    /// A definition in the local crate, and its "name": symbol or def-path depending on whether the
+    /// definition is generic.
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct LocalDefinition {
+        pub def_idx: usize,
+
+        pub has_generics: bool,
+
+        /// The symbol if the definition is not generic. The def-path if it is generic.
+        pub name: String,
+    }
+
+    /// A local or foreign definition that was actually codegened. Monomorphizations of generic
+    /// definitions will have the same def-idx but a different symbol.
+    #[derive(Default, Serialize, Deserialize)]
+    pub(crate) struct Monomorphization {
+        pub crate_idx: usize,
+        pub def_idx: usize,
+
+        /// The symbol this monomorphization was codegened as.
+        pub symbol: String,
+
+        /// If this is a monomorphization of a trait fn, its definition (crate index, def index).
+        pub trait_def_id: Option<(usize, usize)>,
+    }
+}
+
+fn analyze_def_use_info<'tcx>(tcx: TyCtxt<'tcx>) {
+    use analysis::*;
+
+    let Ok(dump_path) = std::env::var("DEF_USE_DUMPS") else { return };
+
+    let _timer = std::time::Instant::now();
+
+    // We're in a binary leaf crate, we can analyze each crate's unused definitions from all the
+    // recorded statistics about defs and uses.
+
+    let mut crates = Vec::new();
+    for &cnum in tcx.crates(()) {
+        let metadata = tcx.stable_crate_id(cnum).as_u64().to_string();
+        let key = format!("{}-{}", tcx.crate_name(cnum), metadata);
+        crates.push((cnum, metadata, key));
+    }
+
+    let local_metadata = tcx.stable_crate_id(LOCAL_CRATE).as_u64().to_string();
+    let local_key = format!("{}-{}", tcx.crate_name(LOCAL_CRATE), local_metadata);
+    crates.push((LOCAL_CRATE, local_metadata, local_key));
+
+    // Read all the json dumps for the local crate and dependencies
+    let mut dumps = FxHashMap::default();
+    for (cnum, _, key) in &crates {
+        let path = format!("{}/{}.def_use.json", dump_path, key);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(result) => result,
+            Err(_e) => {
+                // FIXME: make std dependencies work?
+                // eprintln!("couldn't read crate def/use info from {path}: {_e}");
+                continue;
+            }
+        };
+        let dump: dump::DumpCrate = serde_json::from_str(&contents)
+            .expect("JSON decoding of the crate def/use info failed");
+        assert!(dumps.insert(key, (cnum, dump)).is_none());
+    }
+
+    // Record the def indices that have been codegened at least once to compute the list of unused
+    // definition.
+    let mut codegened_def_ids: FxHashMap<&str, BTreeSet<_>> = FxHashMap::default();
+    let mut monomorphizations_per_def_id: FxHashMap<&str, FxHashMap<usize, FxHashSet<_>>> =
+        FxHashMap::default();
+    #[allow(rustc::potential_query_instability)] // no queries are called in this loop
+    for (key, (_, dump)) in &dumps {
+        for dump_mono in &dump.monomorphizations {
+            let mono =
+                Monomorphization { crate_key: key.to_string(), symbol: dump_mono.symbol.clone() };
+
+            // We record this monomorphization as a use of its def-idx.
+            let dependency_key = &dump.dependencies[dump_mono.crate_idx].key;
+            codegened_def_ids.entry(dependency_key).or_default().insert(dump_mono.def_idx);
+            monomorphizations_per_def_id
+                .entry(dependency_key)
+                .or_default()
+                .entry(dump_mono.def_idx)
+                .or_default()
+                .insert(mono.clone());
+
+            // And if it's a trait fn monomorphization, also as a use of that trait fn def-id.
+            if let Some((crate_idx, def_idx)) = dump_mono.trait_def_id {
+                let dependency_key = &dump.dependencies[crate_idx].key;
+                codegened_def_ids.entry(dependency_key).or_default().insert(def_idx);
+                monomorphizations_per_def_id
+                    .entry(dependency_key)
+                    .or_default()
+                    .entry(def_idx)
+                    .or_default()
+                    .insert(mono);
+            }
+        }
+    }
+
+    let mut analysis = Analysis::default();
+    analysis.name = tcx.crate_name(LOCAL_CRATE).to_string();
+    analysis.metadata = tcx.sess.opts.cg.metadata.first().unwrap().clone();
+
+    // We can now compare each crate's definitions to what was actually codegened.
+    for (cnum, metadata, key) in &crates {
+        let cnum = *cnum;
+        let Some((&dump_cnum, dump)) = dumps.get(&key) else {
+            // eprintln!("- couldn't find dump for crate {:?}", tcx.crate_name(cnum));
+            continue;
+        };
+        assert_eq!(cnum, dump_cnum);
+
+        // We don't want to record symbols as being expected in the final binary for the cases where
+        // a different output file is used.
+        if dump.is_dylib_or_proc_macro {
+            continue;
+        }
+
+        // Local crate header
+        let mut local_analysis = CrateAnalysis::default();
+        local_analysis.name = tcx.crate_name(cnum).to_string();
+        local_analysis.metadata = metadata.clone();
+        local_analysis.key = key.clone();
+
+        // Compute used and unused definitions from merged uses
+        let empty = BTreeSet::new();
+        let codegened_def_ids = codegened_def_ids.get(key.as_str()).unwrap_or(&empty);
+
+        let mut unused_definitions = Vec::new();
+        for local_defn in &dump.definitions {
+            if !codegened_def_ids.contains(&local_defn.def_idx) {
+                unused_definitions.push(local_defn);
+            }
+        }
+
+        // Record stats
+        local_analysis.total_definitions = dump.definitions.len();
+        local_analysis.total_used = codegened_def_ids.len();
+        local_analysis.total_unused = unused_definitions.len();
+        assert_eq!(
+            local_analysis.total_definitions,
+            local_analysis.total_used + local_analysis.total_unused
+        );
+
+        // Record used definitions
+        for &def_idx in codegened_def_ids {
+            let Some(local_defn) =
+                dump.definitions.iter().find(|local_defn| local_defn.def_idx == def_idx)
+            else {
+                let def_id = DefId { index: DefIndex::from_usize(def_idx), krate: cnum };
+                let generics = tcx.generics_of(def_id);
+                panic!(
+                    "crate {:?}: couldn't find local definition of recorded use of def_id: {:?}, kind: {:?}, generics: {:?}",
+                    tcx.crate_name(cnum),
+                    def_id,
+                    tcx.def_kind(def_id),
+                    generics,
+                );
+            };
+
+            let used_def = Definition {
+                def_idx,
+                has_generics: local_defn.has_generics,
+                name: local_defn.name.clone(),
+            };
+            local_analysis.definitions_codegened.push(used_def);
+        }
+
+        // Record unused definitions
+        for local_defn in unused_definitions {
+            let unused_def = Definition {
+                def_idx: local_defn.def_idx,
+                has_generics: local_defn.has_generics,
+                name: local_defn.name.clone(),
+            };
+            local_analysis.definitions_unused.push(unused_def);
+        }
+
+        // Record all the monomorphizations of a local defid from the merged monomorphizations.
+        #[allow(rustc::potential_query_instability)] // no queries are called
+        if let Some(monomorphizations_per_def_id) = monomorphizations_per_def_id.get(key.as_str()) {
+            for (&def_idx, monomorphizations) in monomorphizations_per_def_id {
+                local_analysis
+                    .monomorphizations
+                    .entry(def_idx)
+                    .or_default()
+                    .extend(monomorphizations.iter().cloned());
+            }
+        }
+
+        // Record used symbols that we expect to see in the linked binary from the items
+        // monomorphized in the crate.
+        for mono in &dump.monomorphizations {
+            let symbol = ExpectedSymbol { symbol: mono.symbol.clone() };
+            analysis.codegened_symbols.insert(symbol);
+        }
+
+        // Record crate stats into root analysis
+        analysis.total_definitions += local_analysis.total_definitions;
+        analysis.total_used += local_analysis.total_used;
+        analysis.total_unused += local_analysis.total_unused;
+        analysis.components.push(local_analysis);
+    }
+
+    let path = format!("{}/{}-{}.analysis.json", dump_path, analysis.name, analysis.metadata);
+    let file = std::fs::File::create(&path)
+        .unwrap_or_else(|e| panic!("couldn't create dump file at {path}: {e}"));
+    if std::env::var("DEF_USE_DUMPS_PRETTY").is_ok() {
+        if let Err(e) = serde_json::to_writer_pretty(file, &analysis) {
+            panic!("serializing pretty analysis info file failed for {path}: {e}");
+        }
+    } else {
+        if let Err(e) = serde_json::to_writer(file, &analysis) {
+            panic!("serializing analysis info file failed for {path}: {e}");
+        }
+    }
+
+    // eprintln!("analysis done for binary {:?}, serialized to {path}, elapsed: {:?}", tcx.crate_name(LOCAL_CRATE), _timer.elapsed());
+}
+
+fn dump_def_use_info<'tcx>(tcx: TyCtxt<'tcx>, codegen_units: &[&CodegenUnit<'tcx>]) {
+    use dump::*;
+
+    let Ok(dump_path) = std::env::var("DEF_USE_DUMPS") else { return };
+
+    let _timer = std::time::Instant::now();
+
+    // ---
+    // Dump the current crate's definitions and uses
+    let mut dump = DumpCrate::default();
+    dump.name = tcx.crate_name(LOCAL_CRATE).to_string();
+    dump.metadata = tcx.stable_crate_id(LOCAL_CRATE).as_u64().to_string();
+    dump.key = format!("{}-{}", dump.name, dump.metadata);
+
+    // Symbols from dylibs and proc-macros don't end up in the final executable, so we'll need to
+    // filter them out from the list of symbols we expect to be present there.
+    dump.is_dylib_or_proc_macro = tcx.crate_types().iter().any(|crate_type| {
+        matches!(crate_type, CrateType::ProcMacro | CrateType::Cdylib | CrateType::Dylib)
+    });
+
+    // reserve slot 0 for local crate to index by CrateNum
+    dump.dependencies.push(CrateDependency {
+        crate_idx: 0,
+        name: dump.name.clone(),
+        metadata: dump.metadata.clone(),
+        key: dump.key.clone(),
+    });
+
+    for &cnum in tcx.crates(()) {
+        let crate_idx = cnum.as_usize();
+        assert_eq!(dump.dependencies.len(), crate_idx);
+
+        let name = tcx.crate_name(cnum).to_string();
+        let metadata = tcx.stable_crate_id(cnum).as_u64().to_string();
+        let key = format!("{}-{}", name, metadata);
+        dump.dependencies.push(CrateDependency { crate_idx, name, metadata, key });
+    }
+
+    // Record definitions from the local crate, they could be codegened locally or in dependent
+    // crates.
+    let defs = tcx.definitions_untracked();
+    for index in 0..defs.def_index_count() {
+        let def_id = DefId { index: DefIndex::from_usize(index), krate: LOCAL_CRATE };
+
+        match tcx.def_kind(def_id) {
+            // tmp: just these for now, but we may want more
+            DefKind::Fn => {}
+            DefKind::AssocFn => {}
+            // DefKind::Closure => {}
+            _ => continue,
+        }
+
+        let def_idx = def_id.index.as_usize();
+        let generics = tcx.generics_of(def_id);
+        let has_generics = !generics.is_empty();
+        let name = {
+            if has_generics {
+                format!(
+                    "generic function \"{}{}\"",
+                    tcx.crate_name(LOCAL_CRATE),
+                    tcx.def_path(def_id).to_string_no_crate_verbose(),
+                )
+            } else {
+                let instance = Instance::mono(tcx, def_id);
+                tcx.symbol_name(instance).to_string()
+            }
+        };
+        dump.definitions.push(LocalDefinition { def_idx, name, has_generics });
+    }
+
+    // The current crate monomorphizes local and foreign definitions. Collect them.
+    for cgu in codegen_units {
+        for (item, _data) in cgu.items() {
+            match item {
+                MonoItem::Fn(instance) => {
+                    let def_id = instance.def_id();
+                    let def_kind = tcx.def_kind(def_id);
+
+                    // FIXME: we'll also want to support other instance kinds like dynamic dispatch,
+                    // intrinsics and the various shims and drop glue.
+                    if !matches!(instance.def, ty::InstanceKind::Item(_)) {
+                        continue;
+                    }
+
+                    let mut trait_def_id = None;
+
+                    match def_kind {
+                        DefKind::Fn => {}
+                        DefKind::AssocFn => {
+                            let associated_item = tcx.associated_item(def_id);
+                            if let Some(trait_item_def_id) = associated_item.trait_item_def_id {
+                                // Remember this associated function in a trait impl as a
+                                // monomorphization of its trait fn.
+                                trait_def_id = Some((
+                                    trait_item_def_id.krate.as_usize(),
+                                    trait_item_def_id.index.as_usize(),
+                                ));
+                            }
+                        }
+
+                        // FIXME: while this won't change the number of fn definitions and their
+                        // tracking, support the following kinds to have less "unexpected" symbols
+                        // in the binary
+                        // - closures most importantly
+                        // - maybe coroutines and constructors
+                        //
+                        // We just don't record them as symbols to look for in the binary for now.
+                        DefKind::Closure => continue,
+                        DefKind::SyntheticCoroutineBody => continue,
+                        DefKind::Ctor(..) => continue,
+
+                        _ => {
+                            // panic!("Unsupported kind {:?}", def_kind)
+                            continue;
+                        }
+                    }
+
+                    dump.monomorphizations.push(Monomorphization {
+                        crate_idx: def_id.krate.as_usize(),
+                        def_idx: def_id.index.as_usize(),
+                        symbol: tcx.symbol_name(*instance).to_string(),
+                        trait_def_id,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let path = format!("{}/{}-{}.def_use.json", dump_path, dump.name, dump.metadata);
+    let file = std::fs::File::create(&path)
+        .unwrap_or_else(|e| panic!("couldn't create dump file at {path}: {e}"));
+    if std::env::var("DEF_USE_DUMPS_PRETTY").is_ok() {
+        if let Err(e) = serde_json::to_writer_pretty(file, &dump) {
+            panic!("serializing pretty def/use info file failed for {path}: {e}");
+        }
+    } else {
+        if let Err(e) = serde_json::to_writer(file, &dump) {
+            panic!("serializing def/use info file failed for {path}: {e}");
+        }
+    }
+
+    // eprintln!("dumped serialized def/use json to {path}, elapsed: {:?}", _timer.elapsed());
 }
 
 /// Returns whether a call from the current crate to the [`Instance`] would produce a call
