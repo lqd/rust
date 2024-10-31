@@ -82,7 +82,7 @@ mod util;
 pub mod consumers;
 
 use borrow_set::{BorrowData, BorrowSet};
-use dataflow::{BorrowIndex, BorrowckDomain, BorrowckResults, Borrows};
+use dataflow::{BorrowIndex, BorrowckDomain, BorrowckResults, Borrows, RegionLiveness};
 use nll::PoloniusOutput;
 use place_ext::PlaceExt;
 use places_conflict::{PlaceConflictBias, places_conflict};
@@ -209,6 +209,7 @@ fn do_mir_borrowck<'tcx>(
         polonius_output,
         opt_closure_req,
         nll_errors,
+        localized_outlives_constraints,
     } = nll::compute_regions(
         &infcx,
         free_regions,
@@ -255,6 +256,22 @@ fn do_mir_borrowck<'tcx>(
         .into_engine(tcx, body)
         .pass_name("borrowck")
         .iterate_to_fixpoint();
+
+    let flow_loans =
+        dataflow::Loans::new(tcx, body, &regioncx, &borrow_set, &localized_outlives_constraints)
+            .into_engine(tcx, body)
+            .pass_name("borrowck")
+            .iterate_to_fixpoint();
+
+    // tmp: liveness dump
+    let _flow_region_liveness = RegionLiveness {
+        region_count: regioncx.var_infos.len(),
+        live_regions: regioncx.liveness_constraints.points.as_ref().unwrap(),
+        regioncx: &regioncx,
+    }
+    .into_engine(tcx, body)
+    .pass_name("borrowck")
+    .iterate_to_fixpoint();
 
     let movable_coroutine =
         // The first argument is the coroutine type passed by value
@@ -345,6 +362,7 @@ fn do_mir_borrowck<'tcx>(
         ever_inits: flow_ever_inits,
         uninits: flow_uninits,
         borrows: flow_borrows,
+        loans: flow_loans,
     };
 
     rustc_mir_dataflow::visit_results(
@@ -1098,11 +1116,17 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     error_reported = true;
                     match kind {
                         ReadKind::Copy => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!("error A");
+                            }
                             let err = this
                                 .report_use_while_mutably_borrowed(location, place_span, borrow);
                             this.buffer_error(err);
                         }
                         ReadKind::Borrow(bk) => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!("error B");
+                            }
                             let err =
                                 this.report_conflicting_borrow(location, place_span, bk, borrow);
                             this.buffer_error(err);
@@ -1114,19 +1138,23 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 (Reservation(kind) | Activation(kind, _) | Write(kind), _) => {
                     match rw {
                         Reservation(..) => {
-                            debug!(
-                                "recording invalid reservation of \
-                                 place: {:?}",
-                                place_span.0
-                            );
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!(
+                                    "recording invalid reservation of \
+                                    place: {:?}",
+                                    place_span.0
+                                );
+                            }
                             this.reservation_error_reported.insert(place_span.0);
                         }
                         Activation(_, activating) => {
-                            debug!(
-                                "observing check_place for activation of \
-                                 borrow_index: {:?}",
-                                activating
-                            );
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!(
+                                    "observing check_place for activation of \
+                                     borrow_index: {:?}",
+                                    activating
+                                );
+                            }
                         }
                         Read(..) | Write(..) => {}
                     }
@@ -1134,24 +1162,56 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     error_reported = true;
                     match kind {
                         WriteKind::MutableBorrow(bk) => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!(
+                                    "error C, loan {:?}: {:?}, point: {:?}, loc: {:?}",
+                                    borrow_index,
+                                    borrow,
+                                    this.regioncx
+                                        .liveness_constraints
+                                        .point_from_location(location),
+                                    location
+                                );
+                            }
                             let err =
                                 this.report_conflicting_borrow(location, place_span, bk, borrow);
                             this.buffer_error(err);
                         }
-                        WriteKind::StorageDeadOrDrop => this
-                            .report_borrowed_value_does_not_live_long_enough(
+                        WriteKind::StorageDeadOrDrop => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!("error D");
+                            }
+                            this.report_borrowed_value_does_not_live_long_enough(
                                 location,
                                 borrow,
                                 place_span,
                                 Some(WriteKind::StorageDeadOrDrop),
-                            ),
+                            )
+                        }
                         WriteKind::Mutate => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!(
+                                    "error E, loan {:?}: {:?}, point: {:?}, loc: {:?}",
+                                    borrow_index,
+                                    borrow,
+                                    this.regioncx
+                                        .liveness_constraints
+                                        .point_from_location(location),
+                                    location
+                                );
+                            }
                             this.report_illegal_mutation_of_borrowed(location, place_span, borrow)
                         }
                         WriteKind::Move => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!("error F");
+                            }
                             this.report_move_out_while_borrowed(location, place_span, borrow)
                         }
                         WriteKind::Replace => {
+                            if std::env::var("LETSGO").is_ok() {
+                                eprintln!("error G");
+                            }
                             this.report_illegal_mutation_of_borrowed(location, place_span, borrow)
                         }
                     }

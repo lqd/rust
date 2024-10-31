@@ -3353,7 +3353,7 @@ impl Polonius {
 
     /// Returns whether the "next" version of polonius is enabled
     pub fn is_next_enabled(&self) -> bool {
-        matches!(self, Polonius::Next)
+        matches!(self, Polonius::Next) || self.is_legacy_enabled()
     }
 }
 

@@ -1,13 +1,16 @@
-use rustc_data_structures::fx::FxIndexMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::graph;
-use rustc_index::bit_set::BitSet;
-use rustc_middle::mir::{self, BasicBlock, Body, Location, Place, TerminatorEdges};
+use rustc_index::bit_set::{BitSet, ChunkedBitSet};
+use rustc_middle::mir::{
+    self, BasicBlock, Body, CallReturnPlaces, Location, Place, TerminatorEdges,
+};
 use rustc_middle::ty::{RegionVid, TyCtxt};
 use rustc_mir_dataflow::fmt::DebugWithContext;
 use rustc_mir_dataflow::impls::{EverInitializedPlaces, MaybeUninitializedPlaces};
 use rustc_mir_dataflow::{Analysis, Forward, GenKill, Results, ResultsVisitable};
 use tracing::debug;
 
+use crate::constraints::{LocalizedOutlivesConstraint, LocalizedOutlivesConstraintSet};
 use crate::{BorrowSet, PlaceConflictBias, PlaceExt, RegionInferenceContext, places_conflict};
 
 /// The results of the dataflow analyses used by the borrow checker.
@@ -15,6 +18,7 @@ pub(crate) struct BorrowckResults<'a, 'tcx> {
     pub(crate) borrows: Results<'tcx, Borrows<'a, 'tcx>>,
     pub(crate) uninits: Results<'tcx, MaybeUninitializedPlaces<'a, 'tcx>>,
     pub(crate) ever_inits: Results<'tcx, EverInitializedPlaces<'a, 'tcx>>,
+    pub(crate) loans: Results<'tcx, Loans<'a, 'tcx>>,
 }
 
 /// The transient state of the dataflow analyses used by the borrow checker.
@@ -23,6 +27,7 @@ pub(crate) struct BorrowckDomain<'a, 'tcx> {
     pub(crate) borrows: <Borrows<'a, 'tcx> as Analysis<'tcx>>::Domain,
     pub(crate) uninits: <MaybeUninitializedPlaces<'a, 'tcx> as Analysis<'tcx>>::Domain,
     pub(crate) ever_inits: <EverInitializedPlaces<'a, 'tcx> as Analysis<'tcx>>::Domain,
+    pub(crate) loans: <Loans<'a, 'tcx> as Analysis<'tcx>>::Domain,
 }
 
 impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
@@ -34,6 +39,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
             borrows: self.borrows.analysis.bottom_value(body),
             uninits: self.uninits.analysis.bottom_value(body),
             ever_inits: self.ever_inits.analysis.bottom_value(body),
+            loans: self.loans.analysis.bottom_value(body),
         }
     }
 
@@ -41,6 +47,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
         state.borrows.clone_from(self.borrows.entry_set_for_block(block));
         state.uninits.clone_from(self.uninits.entry_set_for_block(block));
         state.ever_inits.clone_from(self.ever_inits.entry_set_for_block(block));
+        state.loans.clone_from(self.loans.entry_set_for_block(block));
     }
 
     fn reconstruct_before_statement_effect(
@@ -52,6 +59,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
         self.borrows.analysis.apply_before_statement_effect(&mut state.borrows, stmt, loc);
         self.uninits.analysis.apply_before_statement_effect(&mut state.uninits, stmt, loc);
         self.ever_inits.analysis.apply_before_statement_effect(&mut state.ever_inits, stmt, loc);
+        self.loans.analysis.apply_before_statement_effect(&mut state.loans, stmt, loc);
     }
 
     fn reconstruct_statement_effect(
@@ -63,6 +71,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
         self.borrows.analysis.apply_statement_effect(&mut state.borrows, stmt, loc);
         self.uninits.analysis.apply_statement_effect(&mut state.uninits, stmt, loc);
         self.ever_inits.analysis.apply_statement_effect(&mut state.ever_inits, stmt, loc);
+        self.loans.analysis.apply_statement_effect(&mut state.loans, stmt, loc);
     }
 
     fn reconstruct_before_terminator_effect(
@@ -74,6 +83,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
         self.borrows.analysis.apply_before_terminator_effect(&mut state.borrows, term, loc);
         self.uninits.analysis.apply_before_terminator_effect(&mut state.uninits, term, loc);
         self.ever_inits.analysis.apply_before_terminator_effect(&mut state.ever_inits, term, loc);
+        self.loans.analysis.apply_before_terminator_effect(&mut state.loans, term, loc);
     }
 
     fn reconstruct_terminator_effect(
@@ -85,6 +95,7 @@ impl<'a, 'tcx> ResultsVisitable<'tcx> for BorrowckResults<'a, 'tcx> {
         self.borrows.analysis.apply_terminator_effect(&mut state.borrows, term, loc);
         self.uninits.analysis.apply_terminator_effect(&mut state.uninits, term, loc);
         self.ever_inits.analysis.apply_terminator_effect(&mut state.ever_inits, term, loc);
+        self.loans.analysis.apply_terminator_effect(&mut state.loans, term, loc);
     }
 }
 
@@ -281,7 +292,7 @@ impl<'tcx> PoloniusOutOfScopePrecomputer<'_, 'tcx> {
             // If the issuing region outlives such a region, its loan escapes the function and
             // cannot go out of scope. We can early return.
             if self.regioncx.is_region_live_at_all_points(successor) {
-                return;
+                // return;
             }
         }
 
@@ -409,11 +420,11 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
                 );
             }
 
-            assert_eq!(
-                borrows_out_of_scope_at_location, polonius_prec.loans_out_of_scope_at_location,
-                "polonius loan scopes differ from NLL borrow scopes, for body {:?}",
-                body.span,
-            );
+            // assert_eq!(
+            //     borrows_out_of_scope_at_location, polonius_prec.loans_out_of_scope_at_location,
+            //     "polonius loan scopes differ from NLL borrow scopes, for body {:?}",
+            //     body.span,
+            // );
 
             borrows_out_of_scope_at_location = polonius_prec.loans_out_of_scope_at_location;
         }
@@ -440,6 +451,13 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
         // region, then setting that gen-bit will override any
         // potential kill introduced here.
         if let Some(indices) = self.borrows_out_of_scope_at_location.get(&location) {
+            // if std::env::var("LETSGO").is_ok() {
+            //     eprintln!(
+            //         "kill_loans_out_of_scope_at_location, killing {} loans: {:?} at {location:?}",
+            //         indices.len(),
+            //         indices
+            //     );
+            // }
             trans.kill_all(indices.iter().copied());
         }
     }
@@ -449,6 +467,259 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
         &self,
         trans: &mut <Self as Analysis<'tcx>>::Domain,
         place: Place<'tcx>,
+        _location: Location,
+        _debug_prefix: &str,
+    ) {
+        debug!("kill_borrows_on_place: place={:?}", place);
+
+        let other_borrows_of_local = self
+            .borrow_set
+            .local_map
+            .get(&place.local)
+            .into_iter()
+            .flat_map(|bs| bs.iter())
+            .copied();
+
+        // If the borrowed place is a local with no projections, all other borrows of this
+        // local must conflict. This is purely an optimization so we don't have to call
+        // `places_conflict` for every borrow.
+        if place.projection.is_empty() {
+            // let debug = std::env::var("LETSGO").is_ok();
+            if !self.body.local_decls[place.local].is_ref_to_static() {
+                // if debug {
+                //     let loans: Vec<_> = other_borrows_of_local.clone().collect();
+                //     eprintln!(
+                //         "{debug_prefix} - kill_borrows_on_place A1: place={place:?}, is not ref to static, killing {} loans: {:?} at {location:?}",
+                //         loans.len(),
+                //         loans
+                //     );
+                // }
+                trans.kill_all(other_borrows_of_local);
+            }
+            // else {
+            //     if debug {
+            //         eprintln!(
+            //             "{debug_prefix} - kill_borrows_on_place A2: place={place:?}, is ref to static, not killing any loans"
+            //         );
+            //     }
+            // }
+            return;
+        }
+
+        // By passing `PlaceConflictBias::NoOverlap`, we conservatively assume that any given
+        // pair of array indices are not equal, so that when `places_conflict` returns true, we
+        // will be assured that two places being compared definitely denotes the same sets of
+        // locations.
+        let definitely_conflicting_borrows = other_borrows_of_local.filter(|&i| {
+            places_conflict(
+                self.tcx,
+                self.body,
+                self.borrow_set[i].borrowed_place,
+                place,
+                PlaceConflictBias::NoOverlap,
+            )
+        });
+
+        // if std::env::var("LETSGO").is_ok() {
+        //     let loans: Vec<_> = definitely_conflicting_borrows.clone().collect();
+        //     eprintln!(
+        //         "{debug_prefix} - kill_borrows_on_place B: place={place:?}, killing {} loans: {:?} at {location:?}",
+        //         loans.len(),
+        //         loans
+        //     );
+        // }
+
+        trans.kill_all(definitely_conflicting_borrows);
+    }
+}
+
+pub(crate) struct Loans<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    body: &'a Body<'tcx>,
+
+    loans: u32,
+    regions: u32,
+
+    borrow_set: &'a BorrowSet<'tcx>,
+    borrows_out_of_scope_at_location: FxIndexMap<Location, Vec<BorrowIndex>>,
+    // localized_outlives_constraints: &'a LocalizedOutlivesConstraintSet,
+    regioncx: &'a RegionInferenceContext<'tcx>,
+
+    constraints_at_point: FxHashMap<PointIndex, FxHashSet<&'a LocalizedOutlivesConstraint>>,
+    constraints_to_succ: FxHashMap<PointIndex, FxHashSet<&'a LocalizedOutlivesConstraint>>,
+}
+
+rustc_index::newtype_index! {
+    #[orderable]
+    #[debug_format = "RL{}"]
+    pub struct RegionLoanIdx {}
+}
+
+trait HasRegionData {
+    fn loans_per_regions(&self) -> u32;
+}
+
+impl<C> DebugWithContext<C> for RegionLoanIdx
+where
+    C: HasRegionData,
+{
+    fn fmt_with(&self, ctxt: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let loans_per_regions = ctxt.loans_per_regions();
+        let region_idx = self.as_u32() / loans_per_regions;
+        let loan_idx = self.as_u32() % loans_per_regions;
+        // write!(f, "R{}L{}", region_idx, loan_idx)
+        write!(f, "L{}R{}", loan_idx, region_idx)
+    }
+}
+
+impl RegionLoanIdx {
+    pub fn from_localized_loan(
+        region_idx: u32,
+        loans_per_region: u32,
+        loan_idx: u32,
+    ) -> RegionLoanIdx {
+        // RegionLoanIdx are a set of loans per region
+        // RegionLoanIdx = region_idx * loans_per_region + loan_idx
+        RegionLoanIdx::from_u32(region_idx * loans_per_region + loan_idx)
+    }
+}
+
+impl HasRegionData for Loans<'_, '_> {
+    fn loans_per_regions(&self) -> u32 {
+        self.loans
+    }
+}
+
+impl<'a, 'tcx> Loans<'a, 'tcx> {
+    pub(crate) fn new(
+        tcx: TyCtxt<'tcx>,
+        body: &'a Body<'tcx>,
+        regioncx: &'a RegionInferenceContext<'tcx>,
+        borrow_set: &'a BorrowSet<'tcx>,
+        localized_outlives_constraints: &'a LocalizedOutlivesConstraintSet,
+    ) -> Self {
+        let mut borrows_out_of_scope_at_location =
+            calculate_borrows_out_of_scope_at_location(body, regioncx, borrow_set);
+
+        // The in-tree polonius analysis computes loans going out of scope using the set-of-loans
+        // model, and makes sure they're identical to the existing computation of the set-of-points
+        // model.
+        if tcx.sess.opts.unstable_opts.polonius.is_next_enabled() {
+            let mut polonius_prec = PoloniusOutOfScopePrecomputer::new(body, regioncx);
+            for (loan_idx, loan_data) in borrow_set.iter_enumerated() {
+                let issuing_region = loan_data.region;
+                let loan_issued_at = loan_data.reserve_location;
+
+                polonius_prec.precompute_loans_out_of_scope(
+                    loan_idx,
+                    issuing_region,
+                    loan_issued_at,
+                );
+            }
+
+            // assert_eq!(
+            //     borrows_out_of_scope_at_location, polonius_prec.loans_out_of_scope_at_location,
+            //     "polonius loan scopes differ from NLL borrow scopes, for body {:?}",
+            //     body.span,
+            // );
+
+            borrows_out_of_scope_at_location = polonius_prec.loans_out_of_scope_at_location;
+        }
+
+        let mut constraints_at_point: FxHashMap<_, FxHashSet<_>> = FxHashMap::default();
+        let mut constraints_to_succ: FxHashMap<_, FxHashSet<_>> = FxHashMap::default();
+
+        for localized_outlive_constraint in &localized_outlives_constraints.outlives {
+            if localized_outlive_constraint.from == localized_outlive_constraint.to {
+                constraints_at_point
+                    .entry(localized_outlive_constraint.from)
+                    .or_default()
+                    .insert(localized_outlive_constraint);
+            } else {
+                constraints_to_succ
+                    .entry(localized_outlive_constraint.from)
+                    .or_default()
+                    .insert(localized_outlive_constraint);
+            }
+        }
+
+        Loans {
+            tcx,
+            body,
+            borrow_set,
+            borrows_out_of_scope_at_location,
+            loans: borrow_set.len() as u32,
+            regions: regioncx.var_infos.len() as u32,
+            // localized_outlives_constraints,
+            regioncx,
+            constraints_at_point,
+            constraints_to_succ,
+        }
+    }
+
+    fn for_all_regions(
+        &self,
+        loans: impl Iterator<Item = BorrowIndex>,
+    ) -> impl Iterator<Item = RegionLoanIdx> {
+        let loan_count = self.loans;
+        let region_count = self.regions;
+        loans.flat_map(move |loan| {
+            (0..region_count).map(move |region| {
+                RegionLoanIdx::from_localized_loan(region, loan_count, loan.as_u32())
+            })
+        })
+    }
+
+    /// Add all borrows to the kill set, if those borrows are out of scope at `location`.
+    /// That means they went out of a nonlexical scope
+    fn kill_loans_out_of_scope_at_location(
+        &self,
+        trans: &mut impl GenKill<RegionLoanIdx>,
+        location: Location,
+    ) {
+        // NOTE: The state associated with a given `location`
+        // reflects the dataflow on entry to the statement.
+        // Iterate over each of the borrows that we've precomputed
+        // to have went out of scope at this location and kill them.
+        //
+        // We are careful always to call this function *before* we
+        // set up the gen-bits for the statement or
+        // terminator. That way, if the effect of the statement or
+        // terminator *does* introduce a new loan of the same
+        // region, then setting that gen-bit will override any
+        // potential kill introduced here.
+        if let Some(loans) = self.borrows_out_of_scope_at_location.get(&location) {
+            let loans = self.for_all_regions(loans.iter().copied());
+            trans.kill_all(loans);
+        }
+
+        let point = self.regioncx.liveness_constraints.point_from_location(location);
+        for region in 0..self.regions {
+            let region = RegionVid::from_u32(region);
+            if !self
+                .regioncx
+                .liveness_constraints
+                .loans
+                .as_ref()
+                .unwrap()
+                .live_regions
+                .contains(point, region)
+                && !self.regioncx.is_region_live_at_all_points(region)
+            {
+                for loan in 0..self.loans {
+                    let idx = RegionLoanIdx::from_localized_loan(region.as_u32(), self.loans, loan);
+                    trans.kill(idx);
+                }
+            }
+        }
+    }
+
+    /// Kill any borrows that conflict with `place`.
+    fn kill_borrows_on_place(
+        &self,
+        trans: &mut impl GenKill<RegionLoanIdx>,
+        place: Place<'tcx>,
+        _location: Location,
     ) {
         debug!("kill_borrows_on_place: place={:?}", place);
 
@@ -465,6 +736,7 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
         // `places_conflict` for every borrow.
         if place.projection.is_empty() {
             if !self.body.local_decls[place.local].is_ref_to_static() {
+                let other_borrows_of_local = self.for_all_regions(other_borrows_of_local);
                 trans.kill_all(other_borrows_of_local);
             }
             return;
@@ -484,7 +756,163 @@ impl<'a, 'tcx> Borrows<'a, 'tcx> {
             )
         });
 
+        let definitely_conflicting_borrows = self.for_all_regions(definitely_conflicting_borrows);
         trans.kill_all(definitely_conflicting_borrows);
+    }
+}
+
+impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Loans<'_, 'tcx> {
+    const NAME: &'static str = "loans";
+    type Domain = ChunkedBitSet<RegionLoanIdx>;
+
+    fn bottom_value(&self, _body: &mir::Body<'tcx>) -> Self::Domain {
+        // self.borrow_set.len() * self.regioncx.definitions.len()
+        ChunkedBitSet::new_empty((self.loans * self.regions) as usize)
+    }
+
+    fn initialize_start_block(&self, _body: &mir::Body<'tcx>, _state: &mut Self::Domain) {}
+
+    fn apply_before_statement_effect(
+        &mut self,
+        state: &mut ChunkedBitSet<RegionLoanIdx>,
+        _statement: &mir::Statement<'tcx>,
+        location: Location,
+    ) {
+        let point = self.regioncx.liveness_constraints.point_from_location(location);
+        if let Some(constraints) = self.constraints_at_point.get(&point) {
+            #[allow(rustc::potential_query_instability)]
+            for constraint in constraints {
+                for loan in 0..self.loans {
+                    let mut idx = RegionLoanIdx::from_localized_loan(
+                        constraint.source.as_u32(),
+                        self.loans,
+                        loan,
+                    );
+                    if state.contains(idx) {
+                        idx = RegionLoanIdx::from_localized_loan(
+                            constraint.target.as_u32(),
+                            self.loans,
+                            loan,
+                        );
+                        state.gen_(idx);
+                    }
+                }
+            }
+        }
+
+        self.kill_loans_out_of_scope_at_location(state, location);
+    }
+
+    fn apply_statement_effect(
+        &mut self,
+        state: &mut ChunkedBitSet<RegionLoanIdx>,
+        statement: &mir::Statement<'tcx>,
+        location: Location,
+    ) {
+        match &statement.kind {
+            mir::StatementKind::Assign(box (lhs, rhs)) => {
+                if let mir::Rvalue::Ref(_, _, place) = rhs {
+                    if place.ignore_borrow(
+                        self.tcx,
+                        self.body,
+                        &self.borrow_set.locals_state_at_exit,
+                    ) {
+                        return;
+                    }
+                    let loan = self.borrow_set.get_index_of(&location).unwrap_or_else(|| {
+                        panic!("could not find BorrowIndex for location {location:?}");
+                    });
+
+                    // gen loan
+                    let loan_data = &self.borrow_set[loan];
+                    let idx = RegionLoanIdx::from_localized_loan(
+                        loan_data.region.as_u32(),
+                        self.loans,
+                        loan.as_u32(),
+                    );
+                    state.gen_(idx);
+                }
+
+                // Make sure there are no remaining borrows for variables
+                // that are assigned over.
+                self.kill_borrows_on_place(state, *lhs, location);
+            }
+
+            mir::StatementKind::StorageDead(local) => {
+                // Make sure there are no remaining borrows for locals that
+                // are gone out of scope.
+                self.kill_borrows_on_place(state, Place::from(*local), location);
+            }
+
+            mir::StatementKind::FakeRead(..)
+            | mir::StatementKind::SetDiscriminant { .. }
+            | mir::StatementKind::Deinit(..)
+            | mir::StatementKind::StorageLive(..)
+            | mir::StatementKind::Retag { .. }
+            | mir::StatementKind::PlaceMention(..)
+            | mir::StatementKind::AscribeUserType(..)
+            | mir::StatementKind::Coverage(..)
+            | mir::StatementKind::Intrinsic(..)
+            | mir::StatementKind::ConstEvalCounter
+            | mir::StatementKind::Nop => {}
+        }
+
+        let point = self.regioncx.liveness_constraints.point_from_location(location);
+        if let Some(constraints) = self.constraints_to_succ.get(&point) {
+            #[allow(rustc::potential_query_instability)]
+            for constraint in constraints {
+                for loan in 0..self.loans {
+                    let mut idx = RegionLoanIdx::from_localized_loan(
+                        constraint.source.as_u32(),
+                        self.loans,
+                        loan,
+                    );
+                    if state.contains(idx) {
+                        idx = RegionLoanIdx::from_localized_loan(
+                            constraint.target.as_u32(),
+                            self.loans,
+                            loan,
+                        );
+                        state.gen_(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_before_terminator_effect(
+        &mut self,
+        trans: &mut ChunkedBitSet<RegionLoanIdx>,
+        _terminator: &mir::Terminator<'tcx>,
+        location: Location,
+    ) {
+        self.kill_loans_out_of_scope_at_location(trans, location);
+    }
+
+    fn apply_terminator_effect<'mir>(
+        &mut self,
+        trans: &mut ChunkedBitSet<RegionLoanIdx>,
+        terminator: &'mir mir::Terminator<'tcx>,
+        location: Location,
+    ) -> TerminatorEdges<'mir, 'tcx> {
+        if let mir::TerminatorKind::InlineAsm { operands, .. } = &terminator.kind {
+            for op in operands {
+                if let mir::InlineAsmOperand::Out { place: Some(place), .. }
+                | mir::InlineAsmOperand::InOut { out_place: Some(place), .. } = *op
+                {
+                    self.kill_borrows_on_place(trans, place, location);
+                }
+            }
+        }
+        terminator.edges()
+    }
+
+    fn apply_call_return_effect(
+        &mut self,
+        _state: &mut ChunkedBitSet<RegionLoanIdx>,
+        _block: BasicBlock,
+        _return_places: CallReturnPlaces<'_, 'tcx>,
+    ) {
     }
 }
 
@@ -533,24 +961,44 @@ impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Borrows<'_, 'tcx> {
                         self.body,
                         &self.borrow_set.locals_state_at_exit,
                     ) {
+                        // if std::env::var("LETSGO").is_ok() {
+                        //     eprintln!(
+                        //         "statement_effect A - ignoring loans, no gen at {location:?}"
+                        //     );
+                        // }
                         return;
                     }
                     let index = self.borrow_set.get_index_of(&location).unwrap_or_else(|| {
                         panic!("could not find BorrowIndex for location {location:?}");
                     });
 
+                    // if std::env::var("LETSGO").is_ok() {
+                    //     eprintln!("statement_effect B - gen of loan {index:?} at {location:?}");
+                    // }
+
                     trans.gen_(index);
                 }
 
                 // Make sure there are no remaining borrows for variables
                 // that are assigned over.
-                self.kill_borrows_on_place(trans, *lhs);
+                // if std::env::var("LETSGO").is_ok() {
+                //     eprintln!("statement_effect C - kill_borrows_on_place on {lhs:?} at {location:?}");
+                // }
+                self.kill_borrows_on_place(trans, *lhs, location, "statement_effect C");
             }
 
             mir::StatementKind::StorageDead(local) => {
                 // Make sure there are no remaining borrows for locals that
                 // are gone out of scope.
-                self.kill_borrows_on_place(trans, Place::from(*local));
+                // if std::env::var("LETSGO").is_ok() {
+                //     eprintln!("statement_effect D - kill_borrows_on_place on {local:?} at {location:?}");
+                // }
+                self.kill_borrows_on_place(
+                    trans,
+                    Place::from(*local),
+                    location,
+                    "statement_effect D",
+                );
             }
 
             mir::StatementKind::FakeRead(..)
@@ -587,7 +1035,10 @@ impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Borrows<'_, 'tcx> {
                 if let mir::InlineAsmOperand::Out { place: Some(place), .. }
                 | mir::InlineAsmOperand::InOut { out_place: Some(place), .. } = *op
                 {
-                    self.kill_borrows_on_place(trans, place);
+                    // if std::env::var("LETSGO").is_ok() {
+                    //     eprintln!("terminator_effect - kill_borrows_on_place on {place:?} at {_location:?}");
+                    // }
+                    self.kill_borrows_on_place(trans, place, _location, "terminator_effect");
                 }
             }
         }
@@ -596,3 +1047,78 @@ impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for Borrows<'_, 'tcx> {
 }
 
 impl<C> DebugWithContext<C> for BorrowIndex {}
+
+use rustc_index::interval::SparseIntervalMatrix;
+use rustc_mir_dataflow::points::PointIndex;
+
+use crate::facts::PoloniusRegionVid;
+
+impl<C> DebugWithContext<C> for PoloniusRegionVid {}
+
+pub(crate) struct RegionLiveness<'tcx, 'a> {
+    pub region_count: usize,
+    pub live_regions: &'a SparseIntervalMatrix<RegionVid, PointIndex>,
+    pub regioncx: &'a RegionInferenceContext<'tcx>,
+}
+
+impl RegionLiveness<'_, '_> {
+    fn is_region_live_at(&self, polonius_region: PoloniusRegionVid, location: Location) -> bool {
+        let region = polonius_region.into();
+        let point = self.regioncx.liveness_constraints.point_from_location(location);
+        self.regioncx.is_region_live_at_all_points(region)
+            || self.live_regions.contains(region, point)
+    }
+
+    fn genkill_regions_at(&self, trans: &mut impl GenKill<PoloniusRegionVid>, location: Location) {
+        for region in 0..self.region_count {
+            let region = PoloniusRegionVid::from_usize(region);
+            if self.is_region_live_at(region, location) {
+                trans.gen_(region);
+            } else {
+                trans.kill(region);
+            }
+        }
+    }
+}
+
+impl<'tcx> rustc_mir_dataflow::Analysis<'tcx> for RegionLiveness<'_, '_> {
+    type Domain = BitSet<PoloniusRegionVid>;
+
+    const NAME: &'static str = "live_regions";
+
+    fn bottom_value(&self, _: &mir::Body<'tcx>) -> Self::Domain {
+        // bottom = no regions are live
+        BitSet::new_empty(self.region_count)
+    }
+
+    fn initialize_start_block(&self, _: &mir::Body<'tcx>, trans: &mut Self::Domain) {
+        self.genkill_regions_at(trans, Location::START);
+    }
+
+    fn apply_statement_effect(
+        &mut self,
+        trans: &mut Self::Domain,
+        _statement: &mir::Statement<'tcx>,
+        location: Location,
+    ) {
+        self.genkill_regions_at(trans, location);
+    }
+
+    fn apply_terminator_effect<'mir>(
+        &mut self,
+        trans: &mut Self::Domain,
+        terminator: &'mir mir::Terminator<'tcx>,
+        location: Location,
+    ) -> TerminatorEdges<'mir, 'tcx> {
+        self.genkill_regions_at(trans, location);
+        terminator.edges()
+    }
+
+    fn apply_call_return_effect(
+        &mut self,
+        _trans: &mut Self::Domain,
+        _block: BasicBlock,
+        _return_places: CallReturnPlaces<'_, 'tcx>,
+    ) {
+    }
+}

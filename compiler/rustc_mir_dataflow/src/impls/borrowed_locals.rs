@@ -139,6 +139,7 @@ where
 
 /// The set of locals that are borrowed at some point in the MIR body.
 pub fn borrowed_locals(body: &Body<'_>) -> BitSet<Local> {
+    #[derive(Debug)]
     struct Borrowed(BitSet<Local>);
 
     impl GenKill<Local> for Borrowed {

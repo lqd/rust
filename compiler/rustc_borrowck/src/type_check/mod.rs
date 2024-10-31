@@ -48,7 +48,9 @@ use rustc_trait_selection::traits::query::type_op::{TypeOp, TypeOpOutput};
 use tracing::{debug, instrument, trace};
 
 use crate::borrow_set::BorrowSet;
-use crate::constraints::{OutlivesConstraint, OutlivesConstraintSet};
+use crate::constraints::{
+    LocalizedOutlivesConstraintSet, OutlivesConstraint, OutlivesConstraintSet,
+};
 use crate::diagnostics::UniverseInfo;
 use crate::facts::AllFacts;
 use crate::location::LocationTable;
@@ -139,6 +141,7 @@ pub(crate) fn type_check<'a, 'tcx>(
         member_constraints: MemberConstraintSet::default(),
         type_tests: Vec::default(),
         universe_causes: FxIndexMap::default(),
+        localized_outlives_constraints: Default::default(),
     };
 
     let CreateResult {
@@ -916,6 +919,8 @@ pub(crate) struct MirTypeckRegionConstraints<'tcx> {
     pub(crate) universe_causes: FxIndexMap<ty::UniverseIndex, UniverseInfo<'tcx>>,
 
     pub(crate) type_tests: Vec<TypeTest<'tcx>>,
+
+    pub(crate) localized_outlives_constraints: LocalizedOutlivesConstraintSet,
 }
 
 impl<'tcx> MirTypeckRegionConstraints<'tcx> {

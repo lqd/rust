@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use rustc_data_structures::fx::{FxHashSet, FxIndexSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_index::Idx;
 use rustc_index::bit_set::SparseBitMatrix;
 use rustc_index::interval::{IntervalSet, SparseIntervalMatrix};
@@ -48,7 +48,7 @@ pub(crate) struct LivenessValues {
     ///
     /// This is not initialized for promoteds, because we don't care *where* within a promoted a
     /// region is live, only that it is.
-    points: Option<SparseIntervalMatrix<RegionVid, PointIndex>>,
+    pub(crate) points: Option<SparseIntervalMatrix<RegionVid, PointIndex>>,
 
     /// When using `-Zpolonius=next`, for each point: the loans flowing into the live regions at
     /// that point.
@@ -64,13 +64,25 @@ pub(crate) struct LiveLoans {
 
     /// The set of loans that are live at a given point in the CFG.
     pub(crate) live_loans: SparseBitMatrix<PointIndex, BorrowIndex>,
+
+    /// The set of loans that are live at a given point in the CFG.
+    pub(crate) live_loans2: SparseBitMatrix<PointIndex, BorrowIndex>,
+
+    /// The set of regions that are live at a given point in the CFG, used to create localized
+    /// outlives constraints between regions that are live at connected points in the CFG.
+    pub(crate) live_regions: SparseBitMatrix<PointIndex, RegionVid>,
+
+    pub live_region_variances: FxHashMap<RegionVid, FxHashSet<ty::Variance>>,
 }
 
 impl LiveLoans {
-    pub(crate) fn new(num_loans: usize) -> Self {
+    pub(crate) fn new(num_loans: usize, num_regions: usize) -> Self {
         LiveLoans {
             live_loans: SparseBitMatrix::new(num_loans),
+            live_loans2: SparseBitMatrix::new(num_loans),
             inflowing_loans: SparseBitMatrix::new(num_loans),
+            live_regions: SparseBitMatrix::new(num_regions),
+            live_region_variances: FxHashMap::default(),
         }
     }
 }
@@ -127,6 +139,9 @@ impl LivenessValues {
             if let Some(inflowing) = loans.inflowing_loans.row(region) {
                 loans.live_loans.union_row(point, inflowing);
             }
+
+            // Record `region` as live at `point`
+            loans.live_regions.insert(point, region);
         }
     }
 
@@ -145,6 +160,9 @@ impl LivenessValues {
                 if !inflowing.is_empty() {
                     for point in points.iter() {
                         loans.live_loans.union_row(point, inflowing);
+
+                        // Record `region` as live at `point`
+                        loans.live_regions.insert(point, region);
                     }
                 }
             }
@@ -199,13 +217,28 @@ impl LivenessValues {
         self.elements.point_from_location(location)
     }
 
+    #[inline]
+    pub(crate) fn location_from_point(&self, point: PointIndex) -> Location {
+        self.elements.to_location(point)
+    }
+
     /// When using `-Zpolonius=next`, returns whether the `loan_idx` is live at the given `point`.
     pub(crate) fn is_loan_live_at(&self, loan_idx: BorrowIndex, point: PointIndex) -> bool {
-        self.loans
+        let _location_insensitive_loan = self
+            .loans
             .as_ref()
             .expect("Accessing live loans requires `-Zpolonius=next`")
             .live_loans
-            .contains(point, loan_idx)
+            .contains(point, loan_idx);
+
+        // Our duplicate live loans computation
+        let location_sensitive_loan = self
+            .loans
+            .as_ref()
+            .expect("Accessing live loans2 requires `-Zpolonius=next`")
+            .live_loans2
+            .contains(point, loan_idx);
+        location_sensitive_loan
     }
 }
 

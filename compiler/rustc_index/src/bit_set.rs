@@ -1244,7 +1244,12 @@ impl<T: Idx> SparseBitSet<T> {
     }
 
     fn contains(&self, elem: T) -> bool {
-        assert!(elem.index() < self.domain_size);
+        assert!(
+            elem.index() < self.domain_size,
+            "index {} is >= than the domain size {}",
+            elem.index(),
+            self.domain_size
+        );
         self.elems.contains(&elem)
     }
 

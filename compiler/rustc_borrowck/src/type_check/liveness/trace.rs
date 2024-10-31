@@ -49,7 +49,8 @@ pub(super) fn trace<'a, 'tcx>(
     if typeck.tcx().sess.opts.unstable_opts.polonius.is_next_enabled() {
         let borrowck_context = &mut typeck.borrowck_context;
         let borrow_set = &borrowck_context.borrow_set;
-        let mut live_loans = LiveLoans::new(borrow_set.len());
+        // TMP for loan viz, the number of region vars seems to change after liveness, double it here to have space
+        let mut live_loans = LiveLoans::new(borrow_set.len(), typeck.infcx.num_region_vars() * 2);
         let outlives_constraints = &borrowck_context.constraints.outlives_constraints;
         let graph = outlives_constraints.graph(typeck.infcx.num_region_vars());
         let region_graph =
@@ -171,7 +172,7 @@ impl<'a, 'typeck, 'b, 'tcx> LivenessResults<'a, 'typeck, 'b, 'tcx> {
             let local_ty = self.cx.body.local_decls[local].ty;
 
             if !self.use_live_at.is_empty() {
-                self.cx.add_use_live_facts_for(local_ty, &self.use_live_at);
+                self.cx.add_use_live_facts_for(local, local_ty, &self.use_live_at);
             }
 
             if !self.drop_live_at.is_empty() {
@@ -539,10 +540,46 @@ impl<'tcx> LivenessContext<'_, '_, '_, 'tcx> {
     /// points `live_at`.
     fn add_use_live_facts_for(
         &mut self,
-        value: impl TypeVisitable<TyCtxt<'tcx>>,
+        _local: Local,
+        value: Ty<'tcx>,
         live_at: &IntervalSet<PointIndex>,
     ) {
         debug!("add_use_live_facts_for(value={:?})", value);
+
+        // FIXME: As points should not be involved, we should do this unconditionally elsewhere (not
+        // just in add_use_live and drop_live), and reuse the computed region variances. In theory
+        // maybe we shouldn't need to do it on dead vars, but there are constraints flowing into dead
+        // regions and we might need their variance?
+        // TMP: this is trash
+        if let Some(live_loans) =
+            self.typeck.borrowck_context.constraints.liveness_constraints.loans.as_mut()
+        {
+            // No free regions => no variance wrt to regions
+            if value.has_free_regions() {
+                let mut finder = VarianceFinder {
+                    tcx: self.typeck.infcx.tcx,
+                    ambient_variance: ty::Variance::Covariant,
+                    variances: FxHashMap::default(),
+                };
+                finder.relate(value, value).expect("Can't have a type error relating to itself"); // relate ty with itself to extract variance wrt each contained origin
+
+                #[allow(rustc::potential_query_instability)]
+                for (&region, variances) in finder.variances.iter() {
+                    // ignore ReBound
+                    if region.is_bound() {
+                        continue;
+                    }
+                    let region_vid =
+                        self.typeck.borrowck_context.universal_regions.to_region_vid(region);
+                    live_loans
+                        .live_region_variances
+                        .entry(region_vid)
+                        .or_default()
+                        .extend(variances);
+                }
+            }
+        }
+
         Self::make_all_regions_live(self.elements, self.typeck, value, live_at);
     }
 
@@ -570,10 +607,10 @@ impl<'tcx> LivenessContext<'_, '_, '_, 'tcx> {
             values::pretty_print_points(self.elements, live_at.iter()),
         );
 
-        let drop_data = self.drop_data.entry(dropped_ty).or_insert_with({
-            let typeck = &self.typeck;
-            move || Self::compute_drop_data(typeck, dropped_ty)
-        });
+        let drop_data = self
+            .drop_data
+            .entry(dropped_ty)
+            .or_insert_with(|| Self::compute_drop_data(self.typeck, dropped_ty));
 
         if let Some(data) = &drop_data.region_constraint_data {
             for &drop_location in drop_locations {
@@ -594,6 +631,36 @@ impl<'tcx> LivenessContext<'_, '_, '_, 'tcx> {
         // All things in the `outlives` array may be touched by
         // the destructor and must be live at this point.
         for &kind in &drop_data.dropck_result.kinds {
+            // TMP: generalize variance checking between use and drop live, and put it where it
+            // should be located, not here...
+            if let Some(live_loans) =
+                self.typeck.borrowck_context.constraints.liveness_constraints.loans.as_mut()
+            {
+                // No free regions => no variance wrt to regions
+                if kind.has_free_regions() {
+                    let mut finder = VarianceFinder {
+                        tcx: self.typeck.infcx.tcx,
+                        ambient_variance: ty::Variance::Covariant,
+                        variances: FxHashMap::default(),
+                    };
+                    finder.relate(kind, kind).expect("Can't have a type error relating to itself"); // relate ty with itself to extract variance wrt each contained origin
+
+                    #[allow(rustc::potential_query_instability)]
+                    for (&region, variances) in finder.variances.iter() {
+                        if region.is_bound() {
+                            continue;
+                        }
+                        let region_vid =
+                            self.typeck.borrowck_context.universal_regions.to_region_vid(region);
+                        live_loans
+                            .live_region_variances
+                            .entry(region_vid)
+                            .or_default()
+                            .extend(variances);
+                    }
+                }
+            }
+
             Self::make_all_regions_live(self.elements, self.typeck, kind, live_at);
             polonius::add_drop_of_var_derefs_origin(self.typeck, dropped_local, &kind);
         }
@@ -639,5 +706,75 @@ impl<'tcx> LivenessContext<'_, '_, '_, 'tcx> {
             }
             Err(_) => DropData { dropck_result: Default::default(), region_constraint_data: None },
         }
+    }
+}
+
+// ---
+
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_middle::ty;
+use rustc_middle::ty::relate::{self, Relate, RelateResult, TypeRelation};
+
+struct VarianceFinder<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    ambient_variance: ty::Variance,
+    variances: FxHashMap<ty::Region<'tcx>, FxHashSet<ty::Variance>>,
+}
+
+impl<'tcx> TypeRelation<TyCtxt<'tcx>> for VarianceFinder<'tcx> {
+    fn cx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn relate_with_variance<T: Relate<TyCtxt<'tcx>>>(
+        &mut self,
+        variance: ty::Variance,
+        _info: ty::VarianceDiagInfo<TyCtxt<'tcx>>,
+        a: T,
+        b: T,
+    ) -> RelateResult<'tcx, T> {
+        let old_ambient_variance = self.ambient_variance;
+        self.ambient_variance = self.ambient_variance.xform(variance);
+        debug!(?self.ambient_variance, "new ambient variance");
+        let r = self.relate(a, b)?;
+        self.ambient_variance = old_ambient_variance;
+        Ok(r)
+    }
+
+    fn tys(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> RelateResult<'tcx, Ty<'tcx>> {
+        assert_eq!(a, b); // we are misusing TypeRelation here; both LHS and RHS ought to be ==
+        relate::structurally_relate_tys(self, a, b)
+    }
+
+    fn regions(
+        &mut self,
+        a: ty::Region<'tcx>,
+        b: ty::Region<'tcx>,
+    ) -> RelateResult<'tcx, ty::Region<'tcx>> {
+        assert_eq!(a, b); // we are misusing TypeRelation here; both LHS and RHS ought to be ==
+
+        self.variances.entry(a).or_default().insert(self.ambient_variance);
+        Ok(a)
+    }
+
+    fn consts(
+        &mut self,
+        a: ty::Const<'tcx>,
+        b: ty::Const<'tcx>,
+    ) -> RelateResult<'tcx, ty::Const<'tcx>> {
+        assert_eq!(a, b); // we are misusing TypeRelation here; both LHS and RHS ought to be ==
+        relate::structurally_relate_consts(self, a, b)
+    }
+
+    fn binders<T>(
+        &mut self,
+        a: ty::Binder<'tcx, T>,
+        _: ty::Binder<'tcx, T>,
+    ) -> RelateResult<'tcx, ty::Binder<'tcx, T>>
+    where
+        T: Relate<TyCtxt<'tcx>>,
+    {
+        let result = self.relate(a.skip_binder(), a.skip_binder())?;
+        Ok(a.rebind(result))
     }
 }

@@ -25,6 +25,7 @@ use rustc_span::symbol::sym;
 use tracing::{debug, instrument};
 
 use crate::borrow_set::BorrowSet;
+use crate::constraints::LocalizedOutlivesConstraintSet;
 use crate::consumers::ConsumerOptions;
 use crate::diagnostics::RegionErrors;
 use crate::facts::{AllFacts, AllFactsExt, RustcFacts};
@@ -45,6 +46,7 @@ pub(crate) struct NllOutput<'tcx> {
     pub polonius_output: Option<Box<PoloniusOutput>>,
     pub opt_closure_req: Option<ClosureRegionRequirements<'tcx>>,
     pub nll_errors: RegionErrors<'tcx>,
+    pub localized_outlives_constraints: LocalizedOutlivesConstraintSet,
 }
 
 /// Rewrites the regions in the MIR to use NLL variables, also scraping out the set of universal
@@ -129,11 +131,12 @@ pub(crate) fn compute_regions<'a, 'tcx>(
         mut member_constraints,
         universe_causes,
         type_tests,
+        mut localized_outlives_constraints,
     } = constraints;
     let placeholder_indices = Rc::new(placeholder_indices);
 
     // If requested, emit legacy polonius facts.
-    polonius::emit_facts(
+    polonius::legacy::emit_facts(
         &mut all_facts,
         infcx.tcx,
         location_table,
@@ -168,6 +171,16 @@ pub(crate) fn compute_regions<'a, 'tcx>(
         elements,
     );
 
+    // -- XXXX
+    // TMP: convert typeck + liveness constraints to LocalizedSubsetGraph
+    polonius::create_localized_constraints(
+        &mut regioncx,
+        infcx.infcx.tcx,
+        body,
+        &borrow_set,
+        &mut localized_outlives_constraints,
+    );
+
     // If requested: dump NLL facts, and run legacy polonius analysis.
     let polonius_output = all_facts.as_ref().and_then(|all_facts| {
         if infcx.tcx.sess.opts.unstable_opts.nll_facts {
@@ -184,7 +197,7 @@ pub(crate) fn compute_regions<'a, 'tcx>(
             let algorithm = Algorithm::from_str(&algorithm).unwrap();
             debug!("compute_regions: using polonius algorithm {:?}", algorithm);
             let _prof_timer = infcx.tcx.prof.generic_activity("polonius_analysis");
-            Some(Box::new(Output::compute(all_facts, algorithm, false)))
+            Some(Box::new(Output::compute(all_facts, algorithm, true)))
         } else {
             None
         }
@@ -208,6 +221,7 @@ pub(crate) fn compute_regions<'a, 'tcx>(
         polonius_output,
         opt_closure_req: closure_region_requirements,
         nll_errors,
+        localized_outlives_constraints,
     }
 }
 

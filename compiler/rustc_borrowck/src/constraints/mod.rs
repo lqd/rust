@@ -1,9 +1,11 @@
 use std::fmt;
 use std::ops::Index;
 
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_middle::mir::ConstraintCategory;
 use rustc_middle::ty::{RegionVid, TyCtxt, VarianceDiagInfo};
+use rustc_mir_dataflow::points::PointIndex;
 use rustc_span::Span;
 use tracing::{debug, instrument};
 
@@ -217,4 +219,130 @@ rustc_index::newtype_index! {
     #[orderable]
     #[debug_format = "ConstraintSccIndex({})"]
     pub struct ConstraintSccIndex {}
+}
+
+/// A localized outlives constraint reifying the CFG location where this constraint holds within the
+/// origins themselves, as if they were different from point to point: from `a: b` outlives
+/// constraints to `a@p: b@p`, where `p` is the point in the CFG.
+///
+/// This models two sources of constraints:
+/// - constraints that traverse the CFG with the same region, `a@p: a@q`, where `p` is a predecessor
+///   of `q`. These depend on the liveness of the regions at these points.
+/// - constraints that traverse the subsets between regions at a given point, `a@p: b@p`. These
+///   depend on typeck constraints generated via assignments, calls, etc
+///
+/// The `source` origin at `from` flows into the `target` origin at `to`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+pub(crate) struct LocalizedOutlivesConstraint {
+    pub source: RegionVid,
+    pub from: PointIndex,
+    pub target: RegionVid,
+    pub to: PointIndex,
+    pub tag: &'static str,
+}
+
+#[derive(Clone, Default, Debug)]
+pub(crate) struct LocalizedOutlivesConstraintSet {
+    pub outlives: Vec<LocalizedOutlivesConstraint>,
+}
+
+impl LocalizedOutlivesConstraintSet {
+    pub(crate) fn push(&mut self, constraint: LocalizedOutlivesConstraint) {
+        if constraint.source == constraint.target && constraint.from == constraint.to {
+            // 'a@p: 'a@p is pretty uninteresting
+            return;
+        }
+        self.outlives.push(constraint);
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct LocalizedRegionVid {
+    pub(crate) region: RegionVid,
+    pub(crate) point: PointIndex,
+}
+
+rustc_index::newtype_index! {
+    #[debug_format = "LocalizedRegionVidIndex({})"]
+    pub(crate) struct LocalizedRegionVidIndex {}
+}
+
+#[derive(Default)]
+pub(crate) struct LocalizedConstraintGraph {
+    edges: FxHashMap<LocalizedRegionVidIndex, FxHashSet<LocalizedRegionVidIndex>>,
+    nodes_to_indices: FxHashMap<LocalizedRegionVid, LocalizedRegionVidIndex>,
+    indices_to_nodes: FxHashMap<LocalizedRegionVidIndex, LocalizedRegionVid>,
+}
+
+impl LocalizedConstraintGraph {
+    pub(crate) fn new(outlives: &LocalizedOutlivesConstraintSet) -> LocalizedConstraintGraph {
+        let mut nodes_to_indices: FxHashMap<LocalizedRegionVid, LocalizedRegionVidIndex> =
+            FxHashMap::default();
+        let mut indices_to_nodes: FxHashMap<LocalizedRegionVidIndex, LocalizedRegionVid> =
+            FxHashMap::default();
+        let mut edges: FxHashMap<LocalizedRegionVidIndex, FxHashSet<LocalizedRegionVidIndex>> =
+            FxHashMap::default();
+
+        for constraint in &outlives.outlives {
+            let count = nodes_to_indices.len();
+            let source = LocalizedRegionVid { region: constraint.source, point: constraint.from };
+            let source_idx = *nodes_to_indices.entry(source).or_insert(count.into());
+            indices_to_nodes.insert(source_idx, source);
+
+            let count = nodes_to_indices.len();
+            let target = LocalizedRegionVid { region: constraint.target, point: constraint.to };
+            let target_idx = *nodes_to_indices.entry(target).or_insert(count.into());
+            indices_to_nodes.insert(target_idx, target);
+
+            edges.entry(source_idx).or_default().insert(target_idx);
+        }
+
+        LocalizedConstraintGraph { edges, nodes_to_indices, indices_to_nodes }
+    }
+
+    // /// Returns only the outgoing edges from `node`, not the TC.
+    // pub fn outgoing_edges(
+    //     &self,
+    //     node: LocalizedRegionVid,
+    // ) -> impl Iterator<Item = LocalizedRegionVid> + '_ {
+    //     use rustc_data_structures::graph::Successors;
+    //     let idx = self.nodes_to_indices[&node];
+    //     self.successors(idx).map(|succ_idx| self.index_to_node(succ_idx))
+    // }
+
+    pub(crate) fn index_to_node(&self, idx: LocalizedRegionVidIndex) -> LocalizedRegionVid {
+        self.indices_to_nodes[&idx]
+    }
+
+    pub(crate) fn node_to_index(&self, node: LocalizedRegionVid) -> LocalizedRegionVidIndex {
+        self.nodes_to_indices[&node]
+    }
+
+    /// Returns the full set of nodes recursively reachable from `node`.
+    pub(crate) fn all_successors(
+        &self,
+        node: LocalizedRegionVid,
+    ) -> impl Iterator<Item = LocalizedRegionVid> + '_ {
+        let start_idx = self.node_to_index(node);
+        rustc_data_structures::graph::depth_first_search(self, start_idx)
+            .map(|succ_idx| self.index_to_node(succ_idx))
+    }
+}
+
+impl rustc_data_structures::graph::DirectedGraph for LocalizedConstraintGraph {
+    type Node = LocalizedRegionVidIndex;
+
+    fn num_nodes(&self) -> usize {
+        self.nodes_to_indices.len()
+    }
+}
+
+impl rustc_data_structures::graph::Successors for LocalizedConstraintGraph {
+    #[allow(rustc::potential_query_instability)]
+    fn successors(&self, idx: Self::Node) -> impl Iterator<Item = Self::Node> {
+        if let Some(edges) = self.edges.get(&idx) {
+            return either::Either::Left(edges.iter().copied());
+        }
+        either::Either::Right(std::iter::empty())
+    }
 }

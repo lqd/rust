@@ -145,16 +145,16 @@ pub struct RegionInferenceContext<'tcx> {
     /// variables are identified by their index (`RegionVid`). The
     /// definition contains information about where the region came
     /// from as well as its final inferred value.
-    definitions: IndexVec<RegionVid, RegionDefinition<'tcx>>,
+    pub(crate) definitions: IndexVec<RegionVid, RegionDefinition<'tcx>>,
 
     /// The liveness constraints added to each region. For most
     /// regions, these start out empty and steadily grow, though for
     /// each universally quantified region R they start out containing
     /// the entire CFG and `end(R)`.
-    liveness_constraints: LivenessValues,
+    pub(crate) liveness_constraints: LivenessValues,
 
     /// The outlives constraints computed by the type-check.
-    constraints: Frozen<OutlivesConstraintSet<'tcx>>,
+    pub(crate) constraints: Frozen<OutlivesConstraintSet<'tcx>>,
 
     /// The constraint-set, but in graph form, making it easy to traverse
     /// the constraints adjacent to a particular region. Used to construct
@@ -1910,6 +1910,14 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             // larger than that.
             self.find_constraint_paths_between_regions(fr1, |r| {
                 self.cannot_name_placeholder(r, fr1)
+            })
+        })
+        .or_else(|| {
+            // TMP: if everything else failed, avoid ICEs in diagnostics due to lack of physical
+            // edges to always live regions
+            self.find_constraint_paths_between_regions(fr1, |r| {
+                trace!(?r, liveness_constraints=?self.liveness_constraints.pretty_print_live_points(r));
+                self.is_region_live_at_all_points(r)
             })
         })
         .map(|(_path, r)| r)
