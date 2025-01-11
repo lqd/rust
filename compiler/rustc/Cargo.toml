@@ -20,14 +20,16 @@ rustc_smir = { path = "../rustc_smir" }
 stable_mir = { path = "../stable_mir" }
 # tidy-alphabetical-end
 
-[dependencies.tikv-jemalloc-sys]
-version = "0.6.0"
+[dependencies.libmimalloc-sys]
+git = "https://github.com/lqd/mimalloc_rust.git"
+branch = "mimalloc-3.0.1-alpha"
 optional = true
-features = ['unprefixed_malloc_on_supported_platforms']
+default-features = false
+features = ["extended", "override"]
 
 [features]
 # tidy-alphabetical-start
-jemalloc = ['dep:tikv-jemalloc-sys']
+jemalloc = ['dep:libmimalloc-sys']
 llvm = ['rustc_driver_impl/llvm']
 max_level_info = ['rustc_driver_impl/max_level_info']
 rustc_randomized_layouts = ['rustc_driver_impl/rustc_randomized_layouts']
