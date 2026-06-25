@@ -36,9 +36,9 @@ use rustc_target::spec::{
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, FieldKind, SizeKind, VariantInfo};
 use crate::config::{
-    self, BranchProtection, Cfg, CheckCfg, CoverageLevel, CoverageOptions, DebugInfo,
-    ErrorOutputType, FunctionReturn, Input, InstrumentCoverage, InstrumentMcount, LtoCli,
-    NATIVE_CPU, OutFileName, OutputType, PAuthKey, PointerAuthOption, SwitchWithOptPath,
+    self, BranchProtection, Cfg, CheckCfg, CodegenOptionsKey, CoverageLevel, CoverageOptions,
+    DebugInfo, ErrorOutputType, FunctionReturn, Input, InstrumentCoverage, InstrumentMcount,
+    LtoCli, NATIVE_CPU, OutFileName, OutputType, PAuthKey, PointerAuthOption, SwitchWithOptPath,
 };
 use crate::filesearch::FileSearch;
 use crate::lint::LintId;
@@ -418,10 +418,7 @@ impl EarlySession {
     }
 
     pub fn sanitizers(&self) -> SanitizerSet {
-        self.opts
-            .unstable_opts
-            .sanitizer
-            .combine_with_defaults(self.target.options.default_sanitizers)
+        self.opts.cg.sanitizer.combine_with_defaults(self.target.options.default_sanitizers)
     }
 
     pub fn merge_functions(&self) -> MergeFunctions {
@@ -742,7 +739,7 @@ impl Session {
     }
 
     pub fn is_sanitizer_cfi_normalize_integers_enabled(&self) -> bool {
-        self.opts.unstable_opts.sanitizer_cfi_normalize_integers == Some(true)
+        self.opts.cg.sanitizer_cfi_normalize_integers == Some(true)
     }
 
     pub fn is_sanitizer_cfi_recover_enabled(&self) -> bool {
@@ -1128,7 +1125,7 @@ impl Session {
     /// Accessing the session's unstable `branch_protection` option fields directly is linted
     /// against.
     pub fn branch_protection(&self) -> Option<BranchProtection> {
-        let mut bp = self.opts.unstable_opts.branch_protection;
+        let mut bp = self.opts.cg.branch_protection;
 
         if let Some(bp) = bp.as_mut() {
             // Windows on Arm only supports PAC Key B for return address signing, as shown in
@@ -1343,7 +1340,7 @@ fn default_emitter(sopts: &config::Options, source_map: Arc<SourceMap>) -> Box<D
 // JUSTIFICATION: literally session construction
 #[allow(rustc::bad_opt_access)]
 pub fn build_early_session(
-    sopts: config::Options,
+    mut sopts: config::Options,
     target: Target,
     ice_file: Option<PathBuf>,
 ) -> EarlySession {
@@ -1379,6 +1376,19 @@ pub fn build_early_session(
             });
     for warning in target_warnings.warning_messages() {
         dcx.handle().warn(warning)
+    }
+
+    // If the target requires `target-opt` be a target modifier then it is desirable that the
+    // default for the option be compatible with an explicitly set `-Ttarget-cpu`, but because the
+    // `-Ttarget-cpu` default cannot be set in `options!` (it's target-specific, unsurprisingly),
+    // the default needs to be written here so it is in cross-crate metadata.
+    let target_cpu_set =
+        sopts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
+    if target.requires_consistent_cpu && !target_cpu_set {
+        sopts.collected_options.target_modifiers.codegen.insert(
+            CodegenOptionsKey::target_cpu,
+            config::TargetModifierValue::String(target.cpu.to_string()),
+        );
     }
 
     let psess = ParseSess::with_dcx(dcx, source_map);
@@ -1483,7 +1493,7 @@ pub fn build_session(
     let timings = TimingSectionHandler::new(sopts.json_timings);
 
     let pointer_auth_config: Option<PointerAuthConfig> =
-        PointerAuthConfig::from_raw(&sopts.unstable_opts.pointer_authentication, &target);
+        PointerAuthConfig::from_raw(&sopts.cg.pointer_authentication, &target);
 
     // `EarlySess::sanitizers` does some computation but is called infrequently. `Sess::sanitizers`
     // is called much more often so we cache the value.
@@ -1575,12 +1585,22 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         );
     }
 
-    if sess.target.cfg_abi != CfgAbi::Pauthtest
-        && !sess.opts.unstable_opts.pointer_authentication.is_empty()
-    {
+    if sess.target.cfg_abi != CfgAbi::Pauthtest && !sess.opts.cg.pointer_authentication.is_empty() {
         sess.dcx().emit_warn(diagnostics::PointerAuthenticationNotSupportedForTarget {
             target_triple: &sess.opts.target_triple,
         });
+    }
+
+    let target_cpu_set =
+        sess.opts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
+    let target_cpu_set_as_modifier = sess
+        .opts
+        .collected_options
+        .target_modifiers
+        .codegen
+        .contains_key(&CodegenOptionsKey::target_cpu);
+    if sess.target.requires_consistent_cpu && target_cpu_set && !target_cpu_set_as_modifier {
+        sess.dcx().emit_err(diagnostics::TargetCpuNeedsTargetModifierOpt);
     }
 
     // Make sure that any given profiling data actually exists so LLVM can't
@@ -1610,7 +1630,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     let mut unsupported_sanitizers = sess.sanitizers() - supported_sanitizers;
     // Niche: if `fixed-x18`, or effectively switching on `reserved-x18` flag, is enabled
     // we should allow Shadow Call Stack sanitizer.
-    if sess.opts.unstable_opts.fixed_x18 && sess.target.arch == Arch::AArch64 {
+    if sess.opts.cg.fixed_x18 && sess.target.arch == Arch::AArch64 {
         unsupported_sanitizers -= SanitizerSet::SHADOWCALLSTACK;
     }
     match unsupported_sanitizers.into_iter().count() {
@@ -1750,7 +1770,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 
-    if sess.opts.unstable_opts.branch_protection.is_some() && sess.target.arch != Arch::AArch64 {
+    if sess.opts.cg.branch_protection.is_some() && sess.target.arch != Arch::AArch64 {
         sess.dcx().emit_err(diagnostics::BranchProtectionRequiresAArch64);
     }
 
@@ -1812,13 +1832,13 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 
-    if sess.opts.unstable_opts.indirect_branch_cs_prefix {
+    if sess.opts.cg.indirect_branch_cs_prefix {
         if !matches!(sess.target.arch, Arch::X86 | Arch::X86_64) {
             sess.dcx().emit_err(diagnostics::IndirectBranchCsPrefixRequiresX86OrX8664);
         }
     }
 
-    if let Some(regparm) = sess.opts.unstable_opts.regparm {
+    if let Some(regparm) = sess.opts.cg.regparm {
         if regparm > 3 {
             sess.dcx().emit_err(diagnostics::UnsupportedRegparm { regparm });
         }
@@ -1826,7 +1846,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
             sess.dcx().emit_err(diagnostics::UnsupportedRegparmArch);
         }
     }
-    if sess.opts.unstable_opts.reg_struct_return {
+    if sess.opts.cg.reg_struct_return {
         if sess.target.arch != Arch::X86 {
             sess.dcx().emit_err(diagnostics::UnsupportedRegStructReturnArch);
         }
