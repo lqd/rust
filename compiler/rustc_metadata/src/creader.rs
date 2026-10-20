@@ -355,15 +355,41 @@ impl CStore {
             }
         }
 
+        // FIXME: while we're transitioning from `-Z` target modifiers to `-T`, we need to
+        // mix-and-match CodegenOptions and UnstableOptions, which this parsing infra is not made
+        // for. For the short period of time these two will co-exist, we need to collect the shared
+        // fields between the two options strucs, to tailor diagnostics a bit. Remove all this when
+        // only `-T` is used.
+        let mut unstably_set_locally = FxHashSet::default();
+        // JUSTIFICATION: the order doesn't influence query results
+        #[allow(rustc::potential_query_instability)]
+        for k in tcx.sess.opts.collected_options.is_set.unstable.iter() {
+            let x = k.to_string();
+            unstably_set_locally.insert(x);
+        }
+
         for (_, data) in self.iter_crate_data() {
             if data.is_proc_macro_crate() {
                 continue;
             }
+
+            let target_modifiers = data.target_modifiers();
+
+            let mut set_externally = FxHashSet::default();
+            // JUSTIFICATION: the order doesn't influence query results
+            #[allow(rustc::potential_query_instability)]
+            for k in target_modifiers.codegen.keys() {
+                let x = k.to_string();
+                set_externally.insert(x);
+            }
+
             tcx.sess.opts.cg.report_mismatched_flags_with_dep(
                 tcx.sess,
                 tcx.crate_name(LOCAL_CRATE),
-                data.target_modifiers(),
+                target_modifiers,
                 data.name(),
+                &unstably_set_locally,
+                set_externally,
             );
         }
     }

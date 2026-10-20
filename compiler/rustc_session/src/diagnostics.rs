@@ -777,10 +777,13 @@ pub(crate) struct IncompatibleFlagsMismatched {
     "the `-{$target_modifier_prefix}{$flag_name}` flag modifies the ABI so Rust crates compiled with different values of this flag cannot be used together safely"
 )]
 #[note(
-    "unset `-{$target_modifier_prefix}{$flag_name}` in this crate is incompatible with `-{$target_modifier_prefix}{$flag_name}{$extern_value}` in dependency `{$extern_crate}`"
+    "`-{$target_modifier_prefix}{$flag_name}` is unset in this crate which is incompatible with {$has_extern_value ->
+        [false]  `-{$target_modifier_prefix}{$flag_name}` being set
+        *[other] `-{$target_modifier_prefix}{$flag_name}{$extern_value}`
+    } in dependency `{$extern_crate}`"
 )]
 #[help(
-    "set `-{$target_modifier_prefix}{$flag_name}{$extern_value}` in this crate, unset `-{$target_modifier_prefix}{$flag_name}` in `{$extern_crate}`, or use `-{$prefix}{$flag_name}` in `{$extern_crate}`"
+    "set `-{$target_modifier_prefix}{$flag_name}{$extern_value}` in this crate or unset `-{$target_modifier_prefix}{$flag_name}` in `{$extern_crate}`"
 )]
 #[help(
     "if you are sure this will not cause problems, you may use `-Cunsafe-allow-abi-mismatch={$flag_name}` to silence this error"
@@ -792,6 +795,7 @@ pub(crate) struct IncompatibleFlagsUnsetLocally {
     pub target_modifier_prefix: &'static str,
     pub flag_name: String,
     pub extern_value: String,
+    pub has_extern_value: bool,
 }
 
 #[derive(Diagnostic)]
@@ -802,10 +806,16 @@ pub(crate) struct IncompatibleFlagsUnsetLocally {
     "the `-{$target_modifier_prefix}{$flag_name}` flag modifies the ABI so Rust crates compiled with different values of this flag cannot be used together safely"
 )]
 #[note(
-    "unset `-{$target_modifier_prefix}{$flag_name}` in `{$extern_crate}` is incompatible with `-{$target_modifier_prefix}{$flag_name}{$local_value}` in this crate"
+    "{$has_local_value ->
+        [false]  `-{$target_modifier_prefix}{$flag_name}` being set
+        *[other] `-{$target_modifier_prefix}{$flag_name}{$local_value}`
+    } in this crate is incompatible with `-{$target_modifier_prefix}{$flag_name}` being unset in dependency `{$extern_crate}`"
 )]
 #[help(
-    "set `-{$target_modifier_prefix}{$flag_name}{$local_value}` in `{$extern_crate}`, unset `-{$target_modifier_prefix}{$flag_name}` in this crate, or use `-{$prefix}{$flag_name}` in this crate instead"
+    "unset `-{$target_modifier_prefix}{$flag_name}` in this crate or set {$has_local_value ->
+        [false]  `-{$target_modifier_prefix}{$flag_name}`
+        *[other] `-{$target_modifier_prefix}{$flag_name}{$local_value}`
+    } in `{$extern_crate}`"
 )]
 #[help(
     "if you are sure this will not cause problems, you may use `-Cunsafe-allow-abi-mismatch={$flag_name}` to silence this error"
@@ -817,8 +827,5 @@ pub(crate) struct IncompatibleFlagsUnsetExternally {
     pub target_modifier_prefix: &'static str,
     pub flag_name: String,
     pub local_value: String,
+    pub has_local_value: bool,
 }
-
-#[derive(Diagnostic)]
-#[diag("`target-cpu` must be set with `-Ttarget-cpu` for this target")]
-pub(crate) struct TargetCpuNeedsTargetModifierOpt;

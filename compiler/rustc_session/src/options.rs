@@ -259,7 +259,7 @@ top_level_options!(
 
 /// Enum of types that command-line options can take - eventually stored into cross-crate metadata
 /// instead of a `Box<dyn Any>`.
-#[derive(BlobDecodable, Clone, Encodable, PartialEq)]
+#[derive(BlobDecodable, Clone, Encodable, PartialEq, Debug)]
 pub enum TargetModifierValue {
     Bool(bool),
     U32(u32),
@@ -273,7 +273,7 @@ pub enum TargetModifierValue {
 impl fmt::Display for TargetModifierValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Bool(_) => write!(f, ""),
+            Self::Bool(val) => write!(f, "={val}"),
             Self::U32(val) => write!(f, "={val}"),
             Self::Usize(val) => write!(f, "={val}"),
             Self::String(val) => write!(f, "={val}"),
@@ -414,13 +414,13 @@ unsupported_target_modifier_ty!(
     // tidy-alphabetical-end
 );
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct CollectedTargetModifiers {
     pub codegen: FxHashMap<CodegenOptionsKey, TargetModifierValue>,
     pub unstable: FxHashMap<UnstableOptionsKey, TargetModifierValue>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct CollectedIsSet {
     pub codegen: FxHashSet<CodegenOptionsKey>,
     pub unstable: FxHashSet<UnstableOptionsKey>,
@@ -431,6 +431,32 @@ pub struct CollectedOptions {
     pub mitigations: mitigation_coverage::MitigationCoverageMap,
     pub is_set: CollectedIsSet,
     pub target_modifiers: CollectedTargetModifiers,
+}
+
+impl std::fmt::Display for CollectedOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CollectedOptions, is_set: {}, target_modifiers: {}",
+            self.is_set, self.target_modifiers,
+        )
+    }
+}
+
+impl std::fmt::Display for CollectedIsSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CollectedIsSet[codegen: {:?}, unstable: {:?}]", self.codegen, self.unstable)
+    }
+}
+
+impl std::fmt::Display for CollectedTargetModifiers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CollectedTargetModifiers[codegen: {:?}, unstable: {:?}]",
+            self.codegen, self.unstable
+        )
+    }
 }
 
 macro_rules! setter_for {
@@ -523,7 +549,7 @@ macro_rules! options {
         }
 
         #[allow(nonstandard_style)]
-        #[derive(BlobDecodable, Copy, Clone, Eq, Encodable, Hash, PartialEq, PartialOrd, Ord)]
+        #[derive(BlobDecodable, Copy, Clone, Eq, Encodable, Hash, PartialEq, PartialOrd, Ord, Debug)]
         #[repr(u32)]
         pub enum $key_name {
             $(
@@ -623,45 +649,68 @@ macro_rules! options {
                 sess: &crate::Session,
                 local_crate: rustc_span::Symbol,
                 extern_opts: CollectedTargetModifiers,
-                extern_crate: rustc_span::Symbol
+                extern_crate: rustc_span::Symbol,
+                unstably_set_locally: &FxHashSet<String>,
+                set_externally: FxHashSet<String>,
             ) {
                 let allowed_flag_mismatches = &sess.opts.cg.unsafe_allow_abi_mismatch;
-                let compare = |local_value: Option<&TargetModifierValue>, extern_value: Option<&TargetModifierValue>, flag_name| {
-                        match (local_value, extern_value) {
-                            (Some(local_value), Some(extern_value)) if local_value != extern_value => {
-                                sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsMismatched {
-                                    local_crate,
-                                    extern_crate,
-                                    prefix: $prefix,
-                                    target_modifier_prefix: $target_modifier_prefix.expect("mismatch w/out prefix"),
-                                    flag_name,
-                                    local_value: local_value.to_string(),
-                                    extern_value: extern_value.to_string(),
-                                });
-                            },
-                            (None, Some(extern_value)) => {
-                                sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsUnsetLocally {
-                                    local_crate,
-                                    extern_crate,
-                                    prefix: $prefix,
-                                    target_modifier_prefix: $target_modifier_prefix.expect("mismatch w/out prefix"),
-                                    flag_name,
-                                    extern_value: extern_value.to_string(),
-                                });
-                            },
-                            (Some(local_value), None) => {
-                                sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsUnsetExternally {
-                                    local_crate,
-                                    extern_crate,
-                                    prefix: $prefix,
-                                    target_modifier_prefix: $target_modifier_prefix.expect("mismatch w/out prefix"),
-                                    flag_name,
-                                    local_value: local_value.to_string(),
-                                });
-                            },
-                            (Some(_), Some(_)) => { /* no-op, matching flag values */ }
-                            (None, None) => { /* no-op, neither flag is passed as a target modifier */ }
-                        }
+                let compare = |local_value: Option<&TargetModifierValue>, extern_value: Option<&TargetModifierValue>, flag_name, is_target_modifier| {
+                    // The prefix the diagnostics should use depends on how the flag was passed:
+                    // - via a `-Z flag` while the transition period is ongoing,
+                    // - via a `-T flag`, possibly with `-Zunstable-options`,
+                    // - via a `-C flag`, possibly with `-Zunstable-options`, but only if the flag
+                    //   is not always a target modifier, since those need `-T`.
+                    match (local_value, extern_value) {
+                        (Some(local_value), Some(extern_value)) if local_value != extern_value => {
+                            // Suboptimal: we can't know whether a flag was externally set using
+                            // -C/-T or -Z. Until the transition period is over, most flags are
+                            // unstable, and we assume they were using -Z.
+                            let was_externally_set = set_externally.contains(&flag_name);
+                            let target_modifier_prefix = if was_externally_set { "Z" } else { $target_modifier_prefix.expect("mismatch w/out prefix") };
+                            let prefix = if was_externally_set { "Z" } else if is_target_modifier { $target_modifier_prefix.expect("mismatch w/out prefix") } else { $prefix };
+                            sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsMismatched {
+                                local_crate,
+                                extern_crate,
+                                prefix,
+                                target_modifier_prefix,
+                                flag_name,
+                                local_value: local_value.to_string(),
+                                extern_value: extern_value.to_string(),
+                            });
+                        },
+                        (None, Some(extern_value)) => {
+                            let was_unstably_set = set_externally.contains(&flag_name);
+                            let target_modifier_prefix = if was_unstably_set { "Z" } else { $target_modifier_prefix.expect("mismatch w/out prefix") };
+                            let prefix = if was_unstably_set { "Z" } else if is_target_modifier { $target_modifier_prefix.expect("mismatch w/out prefix") } else { $prefix };
+                            let extern_value = extern_value.to_string();
+                            sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsUnsetLocally {
+                                local_crate,
+                                extern_crate,
+                                prefix,
+                                target_modifier_prefix,
+                                flag_name,
+                                has_extern_value: !extern_value.is_empty(),
+                                extern_value,
+                            });
+                        },
+                        (Some(local_value), None) => {
+                            let was_unstably_set = unstably_set_locally.contains(&flag_name);
+                            let target_modifier_prefix = if was_unstably_set { "Z" } else { $target_modifier_prefix.expect("mismatch w/out prefix") };
+                            let prefix = if was_unstably_set { "Z" } else if is_target_modifier { $target_modifier_prefix.expect("mismatch w/out prefix") } else { $prefix };
+                            let local_value = local_value.to_string();
+                            sess.dcx().emit_err(crate::diagnostics::IncompatibleFlagsUnsetExternally {
+                                local_crate,
+                                extern_crate,
+                                prefix,
+                                target_modifier_prefix,
+                                flag_name,
+                                has_local_value: !local_value.is_empty(),
+                                local_value,
+                            });
+                        },
+                        (Some(_), Some(_)) => { /* no-op, matching flag values */ }
+                        (None, None) => { /* no-op, neither flag is passed as a target modifier */ }
+                    }
                 };
 
                 $(
@@ -670,7 +719,7 @@ macro_rules! options {
                     if !allowed {
                         let local_value = sess.opts.collected_options.target_modifiers.$group_name.get(&$key_name::$opt);
                         let extern_value = extern_opts.$group_name.get(&$key_name::$opt);
-                        compare(local_value, extern_value, flag_name);
+                        compare(local_value, extern_value, flag_name, self.is_target_modifier(stringify!($opt)));
                     }
                 )*
             }
@@ -1420,7 +1469,7 @@ pub mod parse {
         v: Option<&str>,
         is_target_modifier: bool,
     ) -> bool {
-        parse_sanitizers_with_filter(slot, v, is_target_modifier, true)
+        parse_sanitizers_with_filter(slot, v, is_target_modifier, !true)
     }
 
     pub(crate) fn parse_sanitizers_unfiltered(
@@ -2607,6 +2656,8 @@ options! {
     #[rustc_lint_opt_deny_field_access("use `Session::sanitizers()` instead of this field")]
     sanitizer: SanitizerSet = (SanitizerSet::empty(), parse_sanitizers, [TRACKED_UNSTABLE],
         "use a sanitizer"),
+    sanitizer_cfi_minimal_runtime: Option<bool> = (None, parse_opt_bool, [TRACKED_UNSTABLE] { TARGET_MODIFIER: Only },
+        "enable minimal UBSan runtime for CFI (default: no)"),
     sanitizer_cfi_normalize_integers: Option<bool> = (None, parse_opt_bool, [TRACKED_UNSTABLE] { TARGET_MODIFIER: Only },
         "enable normalizing integer types (default: no)"),
     save_temps: bool = (false, parse_bool, [UNTRACKED] { TARGET_MODIFIER: Never },
@@ -2697,6 +2748,10 @@ options! {
         (default: no)"),
     box_noalias: bool = (true, parse_bool, [TRACKED],
         "emit noalias metadata for box (default: yes)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("use `Session::branch_protection` instead of this field")]
+    branch_protection: Option<BranchProtection> = (None, parse_branch_protection, [TRACKED],
+        "set options for branch target identification and pointer authentication on AArch64"),
     build_sdylib_interface: bool = (false, parse_bool, [UNTRACKED],
         "whether the stable interface is being built"),
     cache_proc_macros: bool = (false, parse_bool, [TRACKED],
@@ -2803,6 +2858,10 @@ options! {
     fewer_names: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "reduce memory use by retaining fewer names within compilation artifacts (LLVM-IR) \
         (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    fixed_x18: bool = (false, parse_bool, [TRACKED],
+        "make the x18 register reserved on AArch64 (default: no)"),
     flatten_format_args: bool = (true, parse_bool, [TRACKED],
         "flatten nested format_args!() and literals into a simplified format_args!() call \
         (default: yes)"),
@@ -2852,6 +2911,10 @@ options! {
         - hashes of green query instances
         - hash collisions of query keys
         - hash collisions when creating dep-nodes"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    indirect_branch_cs_prefix: bool = (false, parse_bool, [TRACKED],
+        "add `cs` prefix to `call` and `jmp` to indirect thunks (default: no)"),
     inline_llvm: bool = (true, parse_bool, [TRACKED],
         "enable LLVM inlining (default: yes)"),
     inline_mir: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -2906,6 +2969,12 @@ options! {
         "a list of module flags to pass to LLVM (space separated)"),
     llvm_plugins: Vec<String> = (Vec::new(), parse_list, [TRACKED],
         "a list LLVM plugins to enable (space separated)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    llvm_target_feature: String = (String::new(), parse_target_feature, [TRACKED],
+        "enable/disable LLVM-level target features. \
+        This feature is unsafe and can cause ABI issues and compiler crashes, \
+        because LLVM does not support all target feature combinations."),
     llvm_time_trace: bool = (false, parse_bool, [UNTRACKED],
         "generate JSON tracing data file from LLVM data (default: no)"),
     llvm_writable: bool = (false, parse_bool, [TRACKED],
@@ -3020,6 +3089,27 @@ options! {
         "whether to use the PLT when calling into shared libraries;
         only has effect for PIC code on systems with ELF binaries
         (default: PLT is disabled if full relro is enabled on x86_64)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    pointer_authentication: Vec<(PointerAuthOption, bool)> = (
+        Vec::new(),
+        parse_pointer_authentication_list_with_polarity,
+        [TRACKED],
+        "A comma-separated list of pointer authentication options, each prefixed with `+` (enable) or `-` (disable). Available options:
+        `aarch64-jump-table-hardening` - enable hardened lowering for jump-table dispatch
+        `auth-traps` - trap immediately on pointer authentication failure
+        `calls` - enable signing and authentication of all indirect calls
+        `elf-got` - enable authentication of pointers from GOT (ELF only)
+        `function-pointer-type-discrimination` - enable type discrimination on C function pointers
+        `indirect-gotos` - enable signing and authentication of indirect goto targets
+        `init-fini` - enable signing of function pointers in init/fini arrays
+        `init-fini-address-discrimination` - enable address discrimination in init/fini arrays
+        `intrinsics` - pointer authentication intrinsics
+        `return-addresses` - enable signing and authentication of return addresses
+        `typeinfo-vt-ptr-discrimination - incorporate type and address discrimination in authenticated vtable pointers for std::type_info
+        `vt-ptr-addr-discrimination - incorporate address discrimination in authenticated vtable pointers
+        `vt-ptr-type-discrimination - incorporate type discrimination in authenticated vtable pointers
+        Example: `-Zpointer-authentication=+calls,-init-fini`."),
     polonius: Polonius = (Polonius::default(), parse_polonius, [TRACKED],
         POLONIUS_HELP),
     pre_link_arg: (/* redirected to pre_link_args */) = ((), parse_string_push, [UNTRACKED],
@@ -3055,6 +3145,18 @@ options! {
         "enable queries of the dependency graph for regression testing (default: no)"),
     randomize_layout: bool = (false, parse_bool, [TRACKED],
         "randomize the layout of types (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    reg_struct_return: bool = (false, parse_bool, [TRACKED],
+        "On x86-32 targets, it overrides the default ABI to return small structs in registers.
+        It is UNSOUND to link together crates that use different values for this flag!"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    regparm: Option<u32> = (None, parse_opt_number, [TRACKED],
+        "On x86-32 targets, setting this to N causes the compiler to pass N arguments \
+        in registers EAX, EDX, and ECX instead of on the stack for\
+        \"C\", \"cdecl\", and \"stdcall\" fn.\
+        It is UNSOUND to link together crates that use different values for this flag!"),
     relax_elf_relocations: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "whether ELF relocations can be relaxed (x86 only)"),
     remap_cwd_prefix: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
@@ -3064,21 +3166,35 @@ options! {
 written to standard error output)"),
     renormalize_rigid_aliases: bool = (false, parse_bool, [TRACKED],
         "do not skip rigid aliases in normalization for internal debugging"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
     retpoline: bool = (false, parse_bool, [TRACKED],
         "enables retpoline-indirect-branches and retpoline-indirect-calls target features (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
     retpoline_external_thunk: bool = (false, parse_bool, [TRACKED],
         "enables retpoline-external-thunk, retpoline-indirect-branches and retpoline-indirect-calls \
         target features (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("use `Session::sanitizers()` instead of this field")]
+    sanitizer: SanitizerSet = (SanitizerSet::empty(), parse_sanitizers, [TRACKED],
+        "use a sanitizer"),
     sanitizer_ignorelist: Vec<String> = (vec![], parse_list, [TRACKED],
         "list of files providing ignorelists for sanitizers"),
     sanitizer_cfi_canonical_jump_tables: Option<bool> = (Some(true), parse_opt_bool, [TRACKED],
         "enable canonical jump tables (default: yes)"),
     sanitizer_cfi_generalize_pointers: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable generalizing pointer types (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
+    sanitizer_cfi_normalize_integers: Option<bool> = (None, parse_opt_bool, [TRACKED],
+        "enable normalizing integer types (default: no)"),
     sanitizer_cfi_diag: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable CFI diagnostics (default: no)"),
     sanitizer_cfi_recover: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable CFI recovery (default: no)"),
+    // FIXME: remove this duplicate `-Z` option after a transition period to `-T -Zunstable-options`
+    #[rustc_lint_opt_deny_field_access("soft-deprecated, use the same field in the .cg codegen options instead")]
     sanitizer_cfi_minimal_runtime: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "enable minimal UBSan runtime for CFI (default: no)"),
     sanitizer_dataflow_abilist: Vec<String> = (Vec::new(), parse_comma_list, [TRACKED],

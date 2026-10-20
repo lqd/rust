@@ -751,7 +751,7 @@ impl Session {
     }
 
     pub fn is_sanitizer_cfi_minimal_runtime_enabled(&self) -> bool {
-        self.opts.unstable_opts.sanitizer_cfi_minimal_runtime == Some(true)
+        self.opts.cg.sanitizer_cfi_minimal_runtime == Some(true)
     }
 
     pub fn is_sanitizer_kcfi_arity_enabled(&self) -> bool {
@@ -1378,18 +1378,63 @@ pub fn build_early_session(
         dcx.handle().warn(warning)
     }
 
-    // If the target requires `target-opt` be a target modifier then it is desirable that the
-    // default for the option be compatible with an explicitly set `-Ttarget-cpu`, but because the
-    // `-Ttarget-cpu` default cannot be set in `options!` (it's target-specific, unsurprisingly),
-    // the default needs to be written here so it is in cross-crate metadata.
-    let target_cpu_set =
-        sopts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
-    if target.requires_consistent_cpu && !target_cpu_set {
-        sopts.collected_options.target_modifiers.codegen.insert(
-            CodegenOptionsKey::target_cpu,
-            config::TargetModifierValue::String(target.cpu.to_string()),
-        );
+    // // If the target requires `target-cpu` be a target modifier then it is desirable that the
+    // // default for the option be compatible with an explicitly set `-Ttarget-cpu`, but because the
+    // // `-Ttarget-cpu` default cannot be set in `options!` (it's target-specific, unsurprisingly),
+    // // the default needs to be written here so it is in cross-crate metadata.
+    // let target_cpu_set =
+    //     sopts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
+    // if target.requires_consistent_cpu && !target_cpu_set {
+    //     sopts.collected_options.target_modifiers.codegen.insert(
+    //         CodegenOptionsKey::target_cpu,
+    //         config::TargetModifierValue::String(target.cpu.to_string()),
+    //     );
+    // }
+
+    macro_rules! redirect_unstable_target_modifier {
+        ($key:ident) => {
+            if sopts.collected_options.is_set.unstable.contains(&config::UnstableOptionsKey::$key)
+                && sopts.cg.$key != sopts.unstable_opts.$key
+            {
+                sopts.cg.$key = sopts.unstable_opts.$key.clone();
+                sopts.collected_options.is_set.codegen.insert(CodegenOptionsKey::$key);
+                sopts
+                    .collected_options
+                    .target_modifiers
+                    .codegen
+                    .insert(CodegenOptionsKey::$key, sopts.cg.$key.clone().into());
+            }
+        };
     }
+
+    redirect_unstable_target_modifier!(fixed_x18);
+    redirect_unstable_target_modifier!(branch_protection);
+    redirect_unstable_target_modifier!(indirect_branch_cs_prefix);
+    redirect_unstable_target_modifier!(llvm_target_feature);
+    redirect_unstable_target_modifier!(pointer_authentication);
+    redirect_unstable_target_modifier!(reg_struct_return);
+    redirect_unstable_target_modifier!(regparm);
+    redirect_unstable_target_modifier!(retpoline);
+    redirect_unstable_target_modifier!(retpoline_external_thunk);
+
+    // Not every -Zsanitizer is a target modifier.
+    if sopts.collected_options.is_set.unstable.contains(&config::UnstableOptionsKey::sanitizer)
+        && sopts.cg.sanitizer != sopts.unstable_opts.sanitizer
+    {
+        sopts.cg.sanitizer = sopts.unstable_opts.sanitizer.clone();
+        let target_modifiers_sanitizers =
+            sopts.cg.sanitizer - SanitizerSet::ADDRESS - SanitizerSet::LEAK;
+        if !target_modifiers_sanitizers.is_empty() {
+            sopts
+                .collected_options
+                .target_modifiers
+                .codegen
+                .insert(CodegenOptionsKey::sanitizer, target_modifiers_sanitizers.into());
+        }
+    }
+
+    redirect_unstable_target_modifier!(sanitizer_cfi_normalize_integers);
+    redirect_unstable_target_modifier!(sanitizer_cfi_minimal_runtime);
 
     let psess = ParseSess::with_dcx(dcx, source_map);
 
@@ -1591,17 +1636,17 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         });
     }
 
-    let target_cpu_set =
-        sess.opts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
-    let target_cpu_set_as_modifier = sess
-        .opts
-        .collected_options
-        .target_modifiers
-        .codegen
-        .contains_key(&CodegenOptionsKey::target_cpu);
-    if sess.target.requires_consistent_cpu && target_cpu_set && !target_cpu_set_as_modifier {
-        sess.dcx().emit_err(diagnostics::TargetCpuNeedsTargetModifierOpt);
-    }
+    // let target_cpu_set =
+    //     sess.opts.collected_options.is_set.codegen.contains(&CodegenOptionsKey::target_cpu);
+    // let target_cpu_set_as_modifier = sess
+    //     .opts
+    //     .collected_options
+    //     .target_modifiers
+    //     .codegen
+    //     .contains_key(&CodegenOptionsKey::target_cpu);
+    // if sess.target.requires_consistent_cpu && target_cpu_set && !target_cpu_set_as_modifier {
+    //     sess.dcx().emit_err(diagnostics::TargetCpuNeedsTargetModifierOpt);
+    // }
 
     // Make sure that any given profiling data actually exists so LLVM can't
     // decide to silently skip PGO.

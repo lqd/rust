@@ -17,3 +17,4 @@ extern crate cfi_minimal_runtime;
 
 //[wrong_flag]~? ERROR mixing `-Zsanitizer-cfi-minimal-runtime` will cause an ABI mismatch in crate `sanitizer_cfi_minimal_runtime`
 //[wrong_sanitizer]~? ERROR mixing `-Zsanitizer` will cause an ABI mismatch in crate `sanitizer_cfi_minimal_runtime`
+//[wrong_sanitizer]~? ERROR mixing `-Zsanitizer-cfi-minimal-runtime` will cause an ABI mismatch in crate `sanitizer_cfi_minimal_runtime`

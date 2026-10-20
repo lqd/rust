@@ -2057,8 +2057,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
             let is_diag = self.tcx.sess.opts.unstable_opts.sanitizer_cfi_diag.unwrap_or(false);
             let is_recover =
                 self.tcx.sess.opts.unstable_opts.sanitizer_cfi_recover.unwrap_or(false);
-            let is_minimal =
-                self.tcx.sess.opts.unstable_opts.sanitizer_cfi_minimal_runtime.unwrap_or(false);
+            let is_minimal = self.tcx.sess.opts.cg.sanitizer_cfi_minimal_runtime.unwrap_or(false);
 
             if is_diag || is_recover {
                 let fty = if is_minimal {
